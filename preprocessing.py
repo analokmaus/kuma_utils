@@ -25,7 +25,6 @@ import warnings
 Misc.
 '''
 
-
 def KS_test(train, test, plot_rejected=False, plot_accepted=False, thres=0.05):
     '''
     Kolmogorov-Smirnov test
@@ -35,7 +34,7 @@ def KS_test(train, test, plot_rejected=False, plot_accepted=False, thres=0.05):
 
     h0_accepted = []
     h0_rejected = []
-
+    
     for col in test.columns:
         d, p = ks_2samp(train[col], test[col])
 
@@ -45,8 +44,7 @@ def KS_test(train, test, plot_rejected=False, plot_accepted=False, thres=0.05):
                 plt.figure(figsize=(6, 3))
                 plt.title("Kolmogorov-Smirnov test\n"
                           "feature: {}, statistics: {:.5f}, pvalue: {:5f}".format(col, d, p))
-                sns.kdeplot(train[col], color='blue',
-                            shade=True, label='Train')
+                sns.kdeplot(train[col], color='blue', shade=True, label='Train')
                 sns.kdeplot(test[col], color='green', shade=True, label='Test')
                 plt.show()
         else:  # pvalue < thres
@@ -55,8 +53,7 @@ def KS_test(train, test, plot_rejected=False, plot_accepted=False, thres=0.05):
                 plt.figure(figsize=(6, 3))
                 plt.title("Kolmogorov-Smirnov test\n"
                           "feature: {}, statistics: {:.5f}, pvalue: {:5f}".format(col, d, p))
-                sns.kdeplot(train[col], color='blue',
-                            shade=True, label='Train')
+                sns.kdeplot(train[col], color='blue', shade=True, label='Train')
                 sns.kdeplot(test[col], color='green', shade=True, label='Test')
                 plt.show()
 
@@ -66,7 +63,6 @@ def KS_test(train, test, plot_rejected=False, plot_accepted=False, thres=0.05):
 '''
 Categorical encoder
 '''
-
 
 class CatEncoder:
     '''
@@ -80,11 +76,13 @@ class CatEncoder:
 
     ENCODINGS = {'label', 'count', 'target'}
 
+
     def __init__(self, encoding='label', verbose=False, noise_level=0):
         assert encoding in self.ENCODINGS
         self.encoding = encoding
         self.verbose = verbose
         self.noise_level = noise_level
+
 
     def fit(self, X, y=None):
         x = self._all2array(X).copy()
@@ -101,6 +99,7 @@ class CatEncoder:
         else:
             raise ValueError(self.encoding)
 
+    
     def transfrom(self, X):
         x = self._all2array(X).copy()
         common_idx = np.isin(x, np.array(list(self.encode_dict.keys())))
@@ -118,10 +117,12 @@ class CatEncoder:
 
         return self._add_noise(x, self.noise_level)
 
+
     def fit_transform(self, X, y):
         self.fit(X, y)
         return self.transfrom(X)
 
+    
     @staticmethod
     def _all2array(x):
         assert isinstance(x, (np.ndarray, pd.DataFrame, pd.Series))
@@ -135,11 +136,12 @@ class CatEncoder:
 
     @staticmethod
     def _replace(x, d):
-        return np.array([d[v] if v in d.keys() else v for v in x])
+        return np.array([ d[v] if v in d.keys() else v for v in x ])
 
     @staticmethod
     def _add_noise(x, noise_level):
         return x * (1 + noise_level * np.random.randn(len(x)))
+
 
     def _label_encode(self, x_train, y_train):
         self.encode_dict = {}
@@ -150,15 +152,17 @@ class CatEncoder:
         if self.verbose:
             print('label encoder: fitting completed.')
 
+
     def _count_encode(self, x_train, y_train):
         self.encode_dict = {}
 
         values, counts = np.unique(x_train, return_counts=True)
-        for prev, new in zip(values, counts):
+        for prev, new  in zip(values, counts):
             self.encode_dict[prev] = new
 
         if self.verbose:
             print('count encoder: fitting completed.')
+
 
     def _target_encode(self, x_train, y_train):
         self.encode_dict = {}
@@ -176,7 +180,6 @@ class CatEncoder:
 Distribution transformer
 '''
 
-
 class DistTransformer:
     '''
     Scikit-learn API like distribution transformer
@@ -185,8 +188,8 @@ class DistTransformer:
     '''
 
     TRANSFORMS = {
-        'standardization', 'min-max',
-        'box-cox', 'yeo-johnson',
+        'standardization', 'min-max', 
+        'box-cox', 'yeo-johnson', 
         'rankgauss'
     }
 
@@ -194,6 +197,7 @@ class DistTransformer:
         assert transform in self.TRANSFORMS
         self.t = transform
         self.verbose = verbose
+
 
     def fit(self, X):
         x = self._all2array(X).copy().reshape(-1, 1)
@@ -216,13 +220,16 @@ class DistTransformer:
 
         self.transformer.fit(x)
 
+    
     def transform(self, X):
         x = self._all2array(X).copy().reshape(-1, 1)
         return self.transformer.transform(x)
+    
 
     def fit_transform(self, X):
         self.fit(X)
         return self.transform(X)
+
 
     @staticmethod
     def _all2array(x):
@@ -234,3 +241,4 @@ class DistTransformer:
             return x.values[:, 0]
         else:
             return x
+
