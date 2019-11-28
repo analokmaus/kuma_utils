@@ -23,6 +23,8 @@ from lightgbm import LGBMRegressor, LGBMClassifier, Dataset
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge, Lasso
 
+from sklearn.metrics import roc_auc_score
+
 
 '''
 Training automation
@@ -31,6 +33,9 @@ Training automation
 class Trainer:
     '''
     Make machine learning eazy again!
+    USAGE:
+        model = Trainer(CatBoostClassifier(**CAT_PARAMS))
+        model.train(x_train, y_train, x_valid, y_valid, fit_params={})
     '''
 
     MODELS = {
@@ -39,6 +44,7 @@ class Trainer:
         'RandomForestRegressor', 'RandomForestClassifier', 
         'LinearRegression', 'LogisticRegression', 
         'Ridge', 'Lasso',
+        'SVR', 'SVC',
     }
 
 
@@ -67,7 +73,7 @@ class Trainer:
             self.best_iteration = self.model.best_iteration_
 
         else:
-            self.model.fit(X, y)
+            self.model.fit(X, y, **fit_params)
             self.best_iteration = -1
 
 
@@ -83,7 +89,6 @@ class Trainer:
         try:
             return self.model.feature_importances_
         except:
-            print('this model does not have feature importances.')
             return 0
 
 
@@ -98,6 +103,15 @@ class Trainer:
 class CrossValidator:
     '''
     Make cross validation beautiful again?
+    USAGE:
+        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
+        cat_cv = CrossValidator(CatBoostClassifier(**CAT_PARAMS), skf)
+        cat_cv.run(
+            X, y, x_test, 
+            eval_metric=roc_auc_score, prediction='predict', 
+            train_params={'cat_features': CAT_IDXS, 'fit_params': CAT_FIT_PARAMS},
+            verbose=0
+        )
     '''
 
     def __init__(self, model, datasplit):
@@ -120,10 +134,14 @@ class CrossValidator:
 
 
     def run(self, X, y, X_test=None, 
+            group=None, n_splits=None, 
             eval_metric=None, prediction='predict',
             train_params={}, verbose=True):
 
-        K = self.datasplit.n_splits
+        if n_splits is None:
+            K = self.datasplit.n_splits
+        else:
+            K = n_splits
         self.oofs = np.zeros(len(X), dtype=np.float)
         if X_test is not None:
             self.preds = np.zeros(len(X_test), dtype=np.float)
@@ -131,20 +149,21 @@ class CrossValidator:
         self.scores = np.zeros(K)
 
         for fold_i, (train_idx, valid_idx) in enumerate(
-            self.datasplit.split(X, y)):
+            self.datasplit.split(X, y, group)):
 
             x_train, x_valid = X[train_idx], X[valid_idx]
             y_train, y_valid = y[train_idx], y[valid_idx]
 
-            if verbose:
+            if verbose > 0:
                 print(f'\n-----\n {K} fold cross validation. \n Starting fold {fold_i+1}\n-----\n')
-                print(f'train: {len(train_idx)} / valid: {len(valid_idx)}')
-            
+                print(f'[CV]train: {len(train_idx)} / valid: {len(valid_idx)}')
+            if verbose <= 0 and 'fit_params' in train_params.keys():
+                train_params['fit_params']['verbose'] = 0
             model = Trainer(copy(self.basemodel))
             model.train(x_train, y_train, x_valid, y_valid, **train_params)
             self.models.append(model.get_model())
 
-            if verbose:
+            if verbose > 0:
                 print(f'best iteration is {model.get_best_iteration()}')
 
             if prediction == 'predict':
@@ -164,9 +183,12 @@ class CrossValidator:
             
             self.imps[:, fold_i] = model.get_feature_importances()
             self.scores[fold_i] = eval_metric(y_valid, self.oofs[valid_idx])
-        
+
+            if verbose >= 0:
+                print(
+                    f'[CV] Fold {fold_i}: {self.scores[fold_i]:.3f} (iter {model.get_best_iteration()})')
         print(
-            f'\nOverall cv is {np.mean(self.scores):.3f} ± {np.std(self.scores):.3f}')
+            f'[CV] Overall: {np.mean(self.scores):.3f} ± {np.std(self.scores):.3f}')
 
 
     def plot_feature_importances(self, columns):
@@ -194,3 +216,65 @@ class CrossValidator:
         
         self.basemodel, self.datasplit, self.models, \
             self.oofs, self.preds, self.imps = objects
+
+
+'''
+Feature selection
+'''
+
+class AdvFeatureSelection:
+    '''
+    Adversarial feature selection
+    USAGE:
+        adv = AdvFeatureSelection(LogisticRegression(), X, y)
+        adv.run(columns=X.columns, verbose=1)
+        adv.get_importance_features(index=False)
+    '''
+
+    def __init__(self, model, X, y, eval_metric=roc_auc_score):
+        self.X = X
+        self.y = y
+
+        self.model = Trainer(model)
+        self.model.train(self.X, self.y)
+        self.eval_metric = eval_metric
+        self.basescore = self.eval_metric(self.y, self.model.predict_proba(self.X)[:, 1])
+
+
+    def run(self, target=None, columns=None, verbose=False):
+        if columns is None:
+            columns = np.arange(self.X.shape[1])
+        else:
+            if not isinstance(columns, np.ndarray):
+                columns = np.array(columns)
+            assert len(columns) == self.X.shape[1]
+        
+        if target is None:
+            target = columns
+        else:
+            if not isinstance(target, np.ndarray):
+                target = np.array(target)
+            assert len(target) <= len(columns)
+
+        self.columns = columns
+        target = np.where(np.isin(columns, target))[0]
+
+        improvements = []
+        for icol in target:
+            _X = np.delete(self.X, icol, axis=1)
+            self.model.train(_X, self.y)
+            score = self.eval_metric(self.y, self.model.predict_proba(_X)[:, 1])
+            delta = self.basescore - score
+            improvements.append(delta)
+            good = '*' if delta > 0 else ' '
+            if verbose:
+                print(f'{good} {icol}_{columns[icol]}: {delta:.5f}')
+
+        self.improvements = improvements
+
+    
+    def get_importance_features(self, n=5, index=False):
+        if index:
+            return np.argsort(self.improvements)[::-1][:n]
+        else:
+            return self.columns[np.argsort(self.improvements)[::-1][:n]]

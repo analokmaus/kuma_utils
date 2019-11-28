@@ -184,7 +184,8 @@ class DistTransformer:
     '''
     Scikit-learn API like distribution transformer
     USAGE:
-        
+        scaler = DistTransformer(transform='rankgauss')
+        X[col] = scaler.fit_transform(X[col])
     '''
 
     TRANSFORMS = {
