@@ -25,6 +25,48 @@ import warnings
 Misc.
 '''
 
+
+def reduce_mem_usage(df):
+    """ 
+    iterate through all the columns of a dataframe and modify the data type
+    to reduce memory usage.        
+    """
+    start_mem = df.memory_usage().sum() / 1024**2
+    print('Memory usage of dataframe is {:.2f} MB'.format(start_mem))
+
+    for col in df.columns:
+        col_type = df[col].dtype
+
+        if col_type != object:
+            c_min = df[col].min()
+            c_max = df[col].max()
+            if str(col_type)[:3] == 'int':
+                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
+                    df[col] = df[col].astype(np.int8)
+                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
+                    df[col] = df[col].astype(np.int16)
+                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
+                    df[col] = df[col].astype(np.int32)
+                elif c_min > np.iinfo(np.int64).min and c_max < np.iinfo(np.int64).max:
+                    df[col] = df[col].astype(np.int64)
+            else:
+                if c_min > np.finfo(np.float16).min and c_max < np.finfo(np.float16).max:
+                    df[col] = df[col].astype(np.float16)
+                elif c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
+                    df[col] = df[col].astype(np.float32)
+                else:
+                    df[col] = df[col].astype(np.float64)
+        else:
+            df[col] = df[col].astype('category')
+
+    end_mem = df.memory_usage().sum() / 1024**2
+    print('Memory usage after optimization is: {:.2f} MB'.format(end_mem))
+    print('Decreased by {:.1f}%'.format(
+        100 * (start_mem - end_mem) / start_mem))
+
+    return df
+
+
 def KS_test(train, test, plot_rejected=False, plot_accepted=False, thres=0.05):
     '''
     Kolmogorov-Smirnov test
@@ -76,13 +118,11 @@ class CatEncoder:
 
     ENCODINGS = {'label', 'count', 'target'}
 
-
     def __init__(self, encoding='label', verbose=False, noise_level=0):
         assert encoding in self.ENCODINGS
         self.encoding = encoding
         self.verbose = verbose
         self.noise_level = noise_level
-
 
     def fit(self, X, y=None):
         x = self._all2array(X).copy()
@@ -99,7 +139,6 @@ class CatEncoder:
         else:
             raise ValueError(self.encoding)
 
-    
     def transfrom(self, X):
         x = self._all2array(X).copy()
         common_idx = np.isin(x, np.array(list(self.encode_dict.keys())))
@@ -117,12 +156,10 @@ class CatEncoder:
 
         return self._add_noise(x, self.noise_level)
 
-
     def fit_transform(self, X, y):
         self.fit(X, y)
         return self.transfrom(X)
 
-    
     @staticmethod
     def _all2array(x):
         assert isinstance(x, (np.ndarray, pd.DataFrame, pd.Series))
@@ -142,7 +179,6 @@ class CatEncoder:
     def _add_noise(x, noise_level):
         return x * (1 + noise_level * np.random.randn(len(x)))
 
-
     def _label_encode(self, x_train, y_train):
         self.encode_dict = {}
 
@@ -151,7 +187,6 @@ class CatEncoder:
 
         if self.verbose:
             print('label encoder: fitting completed.')
-
 
     def _count_encode(self, x_train, y_train):
         self.encode_dict = {}
@@ -162,7 +197,6 @@ class CatEncoder:
 
         if self.verbose:
             print('count encoder: fitting completed.')
-
 
     def _target_encode(self, x_train, y_train):
         self.encode_dict = {}
@@ -199,7 +233,6 @@ class DistTransformer:
         self.t = transform
         self.verbose = verbose
 
-
     def fit(self, X):
         x = self._all2array(X).copy().reshape(-1, 1)
 
@@ -221,16 +254,13 @@ class DistTransformer:
 
         self.transformer.fit(x)
 
-    
     def transform(self, X):
         x = self._all2array(X).copy().reshape(-1, 1)
         return self.transformer.transform(x)
     
-
     def fit_transform(self, X):
         self.fit(X)
         return self.transform(X)
-
 
     @staticmethod
     def _all2array(x):

@@ -21,6 +21,9 @@
 
 ┣ training.py
     ┣ Trainer           - いろいろなモデルを学習しやすくするためのラッパー
-    ┣ CrossValidator    - CVをシュッと描けるようにし、結果のセーブやロードも可能
+    ┣ CrossValidator    - CVをシュッと行い、結果のセーブやロードも可能
+    ┣ AdvFeatureSelection   - Adversarial validationを使った特徴量選択
 
+┣ metrics.py
+    ┣ SeUnderSp         - 特異度固定時の感度を最大する目的関数
 ```

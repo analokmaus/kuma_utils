@@ -47,7 +47,6 @@ class Trainer:
         'SVR', 'SVC',
     }
 
-
     def __init__(self, model):
         model_type = type(model).__name__
         assert model_type in self.MODELS
@@ -55,7 +54,6 @@ class Trainer:
         self.model = model
         self.model_type = model_type
     
-
     def train(self, X, y, X_valid=None, y_valid=None,
               cat_features=None, eval_metric=None, fit_params={}):
 
@@ -76,25 +74,26 @@ class Trainer:
             self.model.fit(X, y, **fit_params)
             self.best_iteration = -1
 
-
     def get_model(self):
         return self.model
-
 
     def get_best_iteration(self):
         return self.best_iteration
 
-    
     def get_feature_importances(self):
         try:
             return self.model.feature_importances_
         except:
             return 0
-
+    
+    def print_model_params(self):
+        if self.model_type[:8] == 'CatBoost':
+            print(model.get_params())
+        else:
+            print('')
 
     def predict(self, X):
         return self.model.predict(X)
-
 
     def predict_proba(self, X):
         return self.model.predict_proba(X)
@@ -122,16 +121,13 @@ class CrossValidator:
         self.preds = None
         self.imps = None
 
-
     @staticmethod
     def binary_proba(model, X):
         return model.predict_proba(X)[:, 1]
 
-
     @staticmethod
     def predict(model, X):
         return model.predict(X)
-
 
     def run(self, X, y, X_test=None, 
             group=None, n_splits=None, 
@@ -186,10 +182,9 @@ class CrossValidator:
 
             if verbose >= 0:
                 print(
-                    f'[CV] Fold {fold_i}: {self.scores[fold_i]:.3f} (iter {model.get_best_iteration()})')
+                    f'[CV] Fold {fold_i}: {self.scores[fold_i]:.5f} (iter {model.get_best_iteration()})')
         print(
-            f'[CV] Overall: {np.mean(self.scores):.3f} ± {np.std(self.scores):.3f}')
-
+            f'[CV] Overall: {np.mean(self.scores):.5f} ± {np.std(self.scores):.5f}')
 
     def plot_feature_importances(self, columns):
         plt.figure(figsize=(5, int(len(columns) / 3)))
@@ -200,7 +195,6 @@ class CrossValidator:
                 imps_mean[order], xerr=imps_se[order])
         plt.show()
 
-
     def save(self, path):
         objects = [
             self.basemodel, self.datasplit, 
@@ -208,7 +202,6 @@ class CrossValidator:
         ]
         with open(path, 'wb') as f:
             pickle.dump(objects, f)
-    
     
     def load(self, path):
         with open(path, 'rb') as f:
@@ -239,7 +232,6 @@ class AdvFeatureSelection:
         self.model.train(self.X, self.y)
         self.eval_metric = eval_metric
         self.basescore = self.eval_metric(self.y, self.model.predict_proba(self.X)[:, 1])
-
 
     def run(self, target=None, columns=None, verbose=False):
         if columns is None:
@@ -272,7 +264,6 @@ class AdvFeatureSelection:
 
         self.improvements = improvements
 
-    
     def get_importance_features(self, n=5, index=False):
         if index:
             return np.argsort(self.improvements)[::-1][:n]
