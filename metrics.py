@@ -14,6 +14,7 @@ import pandas as pd
 import warnings
 
 from sklearn.metrics import roc_auc_score, confusion_matrix
+from .preprocessing import DistTransformer
 
 
 '''
@@ -34,6 +35,7 @@ class SeUnderSp(object):
     def __init__(self, sp=0.9, maximize=True):
         self.sp = 0.9
         self.maximize = maximize
+        self.scaler = DistTransformer('min-max')
 
     def _get_threshold(self, target, approx):
         tn_idx = (target == 0)
@@ -47,6 +49,7 @@ class SeUnderSp(object):
         if not isinstance(approx, np.ndarray):
             approx = np.array(approx)
         
+        approx = self.scaler.fit_transform(approx)
         thres = self._get_threshold(target, approx)
         pred = (approx > thres).astype(int)
         tn, fp, fn, tp = confusion_matrix(target, pred).ravel()

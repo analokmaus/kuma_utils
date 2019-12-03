@@ -22,7 +22,6 @@ from catboost import CatBoostRegressor, CatBoostClassifier, Pool
 from lightgbm import LGBMRegressor, LGBMClassifier, Dataset
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge, Lasso
-
 from sklearn.metrics import roc_auc_score
 
 
@@ -97,6 +96,13 @@ class Trainer:
 
     def predict_proba(self, X):
         return self.model.predict_proba(X)
+
+    def plot_feature_importances(self, columns):
+        plt.figure(figsize=(5, int(len(columns) / 3)))
+        imps = self.get_feature_importances()
+        order = np.argsort(imps)
+        plt.barh(np.array(columns)[order], imps[order])
+        plt.show()
         
 
 class CrossValidator:
@@ -117,8 +123,8 @@ class CrossValidator:
         self.basemodel = copy(model)
         self.datasplit = datasplit
         self.models = []
-        self.oofs = None
-        self.preds = None
+        self.oof = None
+        self.pred = None
         self.imps = None
 
     @staticmethod
@@ -138,9 +144,9 @@ class CrossValidator:
             K = self.datasplit.n_splits
         else:
             K = n_splits
-        self.oofs = np.zeros(len(X), dtype=np.float)
+        self.oof = np.zeros(len(X), dtype=np.float)
         if X_test is not None:
-            self.preds = np.zeros(len(X_test), dtype=np.float)
+            self.pred = np.zeros(len(X_test), dtype=np.float)
         self.imps = np.zeros((X.shape[1], K))
         self.scores = np.zeros(K)
 
@@ -163,22 +169,22 @@ class CrossValidator:
                 print(f'best iteration is {model.get_best_iteration()}')
 
             if prediction == 'predict':
-                self.oofs[valid_idx] = self.predict(model, x_valid)
+                self.oof[valid_idx] = self.predict(model, x_valid)
             elif prediction == 'binary_proba':
-                self.oofs[valid_idx] = self.binary_proba(model, x_valid)
+                self.oof[valid_idx] = self.binary_proba(model, x_valid)
             else:
-                self.oofs[valid_idx] = self.predict(model, x_valid)
+                self.oof[valid_idx] = self.predict(model, x_valid)
 
             if X_test is not None:
                 if prediction == 'predict':
-                    self.preds += self.predict(model, X_test) / K
+                    self.pred += self.predict(model, X_test) / K
                 elif prediction == 'binary_proba':
-                    self.preds += self.binary_proba(model, X_test) / K
+                    self.pred += self.binary_proba(model, X_test) / K
                 else:
-                    self.preds += self.predict(model, X_test) / K
+                    self.pred += self.predict(model, X_test) / K
             
             self.imps[:, fold_i] = model.get_feature_importances()
-            self.scores[fold_i] = eval_metric(y_valid, self.oofs[valid_idx])
+            self.scores[fold_i] = eval_metric(y_valid, self.oof[valid_idx])
 
             if verbose >= 0:
                 print(
@@ -195,10 +201,19 @@ class CrossValidator:
                 imps_mean[order], xerr=imps_se[order])
         plt.show()
 
+    def save_feature_importances(self, columns, path):
+        plt.figure(figsize=(5, int(len(columns) / 3)))
+        imps_mean = np.mean(self.imps, axis=1)
+        imps_se = np.std(self.imps, axis=1) / np.sqrt(self.imps.shape[0])
+        order = np.argsort(imps_mean)
+        plt.barh(np.array(columns)[order],
+                 imps_mean[order], xerr=imps_se[order])
+        plt.savefig(path)
+
     def save(self, path):
         objects = [
             self.basemodel, self.datasplit, 
-            self.models, self.oofs, self.preds, self.imps
+            self.models, self.oof, self.pred, self.imps
         ]
         with open(path, 'wb') as f:
             pickle.dump(objects, f)
@@ -208,7 +223,7 @@ class CrossValidator:
             objects = pickle.load(f)
         
         self.basemodel, self.datasplit, self.models, \
-            self.oofs, self.preds, self.imps = objects
+            self.oof, self.pred, self.imps = objects
 
 
 '''
