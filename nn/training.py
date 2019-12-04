@@ -116,7 +116,7 @@ class NeuralTrainer:
 
         _align = len(str(start_epoch+epochs))
 
-        for epoch in range(start_epoch, start_epoch + epochs):
+        for _epoch, epoch in enumerate(range(start_epoch, start_epoch + epochs)):
             start_time = time.time()
             self.scheduler.step()
             
@@ -136,6 +136,10 @@ class NeuralTrainer:
                 y = y.to(self.device)
                 loss = criterion(_y, y)
                 loss.backward()
+
+                if _epoch == 0 and batch_i == 0:
+                    # Save output dimension in the first run
+                    self.out_dim = _y.shape[1]
 
                 if batches_done % grad_accumulations == 0:
                     # Accumulates gradient before each step
@@ -252,7 +256,7 @@ class NeuralTrainer:
             self.tta = 1
         batch_size = loader.batch_size
         prediction = np.zeros(
-            (len(loader.dataset), ), dtype=np.float16)
+            (len(loader.dataset), self.out_dim), dtype=np.float16)
 
         self.model.eval()
         with torch.no_grad():
@@ -260,7 +264,7 @@ class NeuralTrainer:
                 for batch_i, (X, _) in enumerate(loader):
                     X = X.to(self.device)
                     _y = self.model(X).detach()
-                    _y = _y.cpu().numpy().squeeze()
+                    _y = _y.cpu().numpy()
                     idx = (batch_i*batch_size, (batch_i+1)*batch_size)
                     prediction[idx[0]:idx[1]] = _y / self.tta
         

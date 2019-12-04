@@ -35,7 +35,6 @@ class SeUnderSp(object):
     def __init__(self, sp=0.9, maximize=True):
         self.sp = 0.9
         self.maximize = maximize
-        self.scaler = DistTransformer('min-max')
 
     def _get_threshold(self, target, approx):
         tn_idx = (target == 0)
@@ -49,7 +48,9 @@ class SeUnderSp(object):
         if not isinstance(approx, np.ndarray):
             approx = np.array(approx)
         
-        approx = self.scaler.fit_transform(approx)
+        if min(approx) < 0:
+            approx -= min(approx) # make all values positive
+        target = target.astype(int)
         thres = self._get_threshold(target, approx)
         pred = (approx > thres).astype(int)
         tn, fp, fn, tp = confusion_matrix(target, pred).ravel()
@@ -60,9 +61,9 @@ class SeUnderSp(object):
 
     def test(self, target, approx):
         if not self.maximize:
-            return 1 - self._get_se_sp(target, approx)[0]
+            return 1 - self._get_se_sp(target, approx)[1]
         else:
-            return self._get_se_sp(target, approx)[0]
+            return self._get_se_sp(target, approx)[1]
 
     '''
     CatBoost
@@ -93,7 +94,7 @@ class SeUnderSp(object):
     Lightgbm
     '''
     def lgbm(self, target, approx):
-        se = self._get_se_sp(target, approx)[0]
+        se = self._get_se_sp(target, approx)[1]
         if self.maximize:
             return 'se', se, self.maximize
         else:

@@ -118,14 +118,16 @@ class CatEncoder:
 
     ENCODINGS = {'label', 'count', 'target'}
 
-    def __init__(self, encoding='label', verbose=False, noise_level=0):
+    def __init__(self, encoding='label', verbose=False, 
+                 noise_level=0, replace_nan=False):
         assert encoding in self.ENCODINGS
         self.encoding = encoding
         self.verbose = verbose
         self.noise_level = noise_level
+        self.replace_nan = replace_nan
 
     def fit(self, X, y=None):
-        x = self._all2array(X).copy()
+        x = self._all2array(X.copy())
         if y is not None:
             assert len(X) == len(y)
             y = self._all2array(y).copy()
@@ -139,37 +141,54 @@ class CatEncoder:
         else:
             raise ValueError(self.encoding)
 
-    def transfrom(self, X):
-        x = self._all2array(X).copy()
+    def transform(self, X):
+        x = self._all2array(X.copy())
+        nan_idx = (x != x)
         common_idx = np.isin(x, np.array(list(self.encode_dict.keys())))
 
         x = self._replace(x, self.encode_dict)
 
+        # deal with new class
+        if self.replace_nan:
+            new_idx = ~common_idx
+        else:
+            new_idx = ~common_idx & ~nan_idx
         if self.encoding == 'label':
-            x[~common_idx] = max(self.encode_dict.values()) + 1
+            x[new_idx] = max(self.encode_dict.values()) + 1
         elif self.encoding == 'count':
-            x[~common_idx] = 0
+            x[new_idx] = 0
         elif self.encoding == 'target':
-            x[~common_idx] = self.target_mean
+            x[new_idx] = self.target_mean
         else:
             raise ValueError(self.encoding)
 
+        if self.encoding == 'target':
+            x = x.astype(np.float16)
+
         return self._add_noise(x, self.noise_level)
 
-    def fit_transform(self, X, y):
+    def fit_transform(self, X, y=None):
         self.fit(X, y)
-        return self.transfrom(X)
+        return self.transform(X)
 
-    @staticmethod
-    def _all2array(x):
+    def _all2array(self, x):
         assert isinstance(x, (np.ndarray, pd.DataFrame, pd.Series))
 
         if isinstance(x, pd.Series):
-            return x.values
+            x = x.values
         elif isinstance(x, pd.DataFrame):
-            return x.values[:, 0]
+            x = x.values[:, 0]
         else:
-            return x
+            pass
+        
+        if self.replace_nan:
+            return x.astype(str).squeeze() # nan -> new class
+        else:
+            return x.squeeze()
+    
+    @staticmethod
+    def _dropna(x):
+        return x[x==x]
 
     @staticmethod
     def _replace(x, d):
@@ -178,9 +197,10 @@ class CatEncoder:
     @staticmethod
     def _add_noise(x, noise_level):
         return x * (1 + noise_level * np.random.randn(len(x)))
-
+    
     def _label_encode(self, x_train, y_train):
         self.encode_dict = {}
+        x_train = self._dropna(x_train)
 
         for new, prev in enumerate(np.sort(np.unique(x_train))):
             self.encode_dict[prev] = new
@@ -190,6 +210,7 @@ class CatEncoder:
 
     def _count_encode(self, x_train, y_train):
         self.encode_dict = {}
+        x_train = self._dropna(x_train)
 
         values, counts = np.unique(x_train, return_counts=True)
         for prev, new  in zip(values, counts):
@@ -200,11 +221,13 @@ class CatEncoder:
 
     def _target_encode(self, x_train, y_train):
         self.encode_dict = {}
+        x_train = self._dropna(x_train)
+        y_train = y_train.astype(np.float16)
 
         for prev in np.unique(x_train):
             labels = y_train[x_train == prev]
-            self.encode_dict[prev] = np.mean(labels)
-        self.target_mean = np.mean(y_train)
+            self.encode_dict[prev] = np.nanmean(labels)
+        self.target_mean = np.nanmean(y_train)
 
         if self.verbose:
             print('target encoder: fitting completed.')

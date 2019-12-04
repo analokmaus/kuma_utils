@@ -85,7 +85,7 @@ class Trainer:
         except:
             return 0
     
-    def print_model_params(self):
+    def get_params(self):
         if self.model_type[:8] == 'CatBoost':
             print(model.get_params())
         else:
@@ -138,7 +138,7 @@ class CrossValidator:
     def run(self, X, y, X_test=None, 
             group=None, n_splits=None, 
             eval_metric=None, prediction='predict',
-            train_params={}, verbose=True):
+            transform=None, train_params={}, verbose=True):
 
         if n_splits is None:
             K = self.datasplit.n_splits
@@ -147,6 +147,7 @@ class CrossValidator:
         self.oof = np.zeros(len(X), dtype=np.float)
         if X_test is not None:
             self.pred = np.zeros(len(X_test), dtype=np.float)
+            x_test = X_test.copy()
         self.imps = np.zeros((X.shape[1], K))
         self.scores = np.zeros(K)
 
@@ -155,6 +156,11 @@ class CrossValidator:
 
             x_train, x_valid = X[train_idx], X[valid_idx]
             y_train, y_valid = y[train_idx], y[valid_idx]
+
+            if transform is not None:
+                x_train, x_valid, y_train, y_valid, x_test = transform(
+                    Xs=(x_train, x_valid), ys=(y_train, y_valid), 
+                    X_test=x_test)
 
             if verbose > 0:
                 print(f'\n-----\n {K} fold cross validation. \n Starting fold {fold_i+1}\n-----\n')
@@ -177,11 +183,11 @@ class CrossValidator:
 
             if X_test is not None:
                 if prediction == 'predict':
-                    self.pred += self.predict(model, X_test) / K
+                    self.pred += self.predict(model, x_test) / K
                 elif prediction == 'binary_proba':
-                    self.pred += self.binary_proba(model, X_test) / K
+                    self.pred += self.binary_proba(model, x_test) / K
                 else:
-                    self.pred += self.predict(model, X_test) / K
+                    self.pred += self.predict(model, x_test) / K
             
             self.imps[:, fold_i] = model.get_feature_importances()
             self.scores[fold_i] = eval_metric(y_valid, self.oof[valid_idx])
