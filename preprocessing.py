@@ -119,12 +119,16 @@ class CatEncoder:
     ENCODINGS = {'label', 'count', 'target'}
 
     def __init__(self, encoding='label', verbose=False, 
-                 noise_level=0, replace_nan=False):
+                 smoothing=False, noise=0, 
+                 dropna=False):
         assert encoding in self.ENCODINGS
         self.encoding = encoding
         self.verbose = verbose
-        self.noise_level = noise_level
-        self.replace_nan = replace_nan
+        self.smoothing = smoothing
+        self.k = 0
+        self.f = 200
+        self.noise = noise
+        self.dropna = dropna
 
     def fit(self, X, y=None):
         x = self._all2array(X.copy())
@@ -149,23 +153,24 @@ class CatEncoder:
         x = self._replace(x, self.encode_dict)
 
         # deal with new class
-        if self.replace_nan:
-            new_idx = ~common_idx
-        else:
+        if self.dropna:
             new_idx = ~common_idx & ~nan_idx
+        else:
+            new_idx = ~common_idx
+        
         if self.encoding == 'label':
             x[new_idx] = max(self.encode_dict.values()) + 1
         elif self.encoding == 'count':
             x[new_idx] = 0
         elif self.encoding == 'target':
-            x[new_idx] = self.target_mean
+            x[new_idx] = self.mean_target_all
         else:
             raise ValueError(self.encoding)
 
         if self.encoding == 'target':
             x = x.astype(np.float16)
 
-        return self._add_noise(x, self.noise_level)
+        return self._add_noise(x, self.noise)
 
     def fit_transform(self, X, y=None):
         self.fit(X, y)
@@ -181,10 +186,14 @@ class CatEncoder:
         else:
             pass
         
-        if self.replace_nan:
-            return x.astype(str).squeeze() # nan -> new class
-        else:
+        if self.dropna:
             return x.squeeze()
+        else:
+            return x.astype(str).squeeze()  # nan -> new class
+
+    def _smooth_func(self, x):
+        '''Sigmoid like function (sigmoid when k=0 f=1)'''
+        return 1 / (1 + np.exp((self.k - x)/self.f))
     
     @staticmethod
     def _dropna(x):
@@ -223,11 +232,20 @@ class CatEncoder:
         self.encode_dict = {}
         x_train = self._dropna(x_train)
         y_train = y_train.astype(np.float16)
+        mean_target_all = np.mean(y_train)
 
-        for prev in np.unique(x_train):
-            labels = y_train[x_train == prev]
-            self.encode_dict[prev] = np.nanmean(labels)
-        self.target_mean = np.nanmean(y_train)
+        for val in np.unique(x_train):
+            idx_class = x_train == val
+            n_class = np.sum(idx_class)
+            mean_target_class = np.mean(y_train[idx_class])
+            if self.smoothing:
+                w = self._smooth_func(n_class)
+                smooth_target = w * mean_target_class + (1 - w) * mean_target_all
+                self.encode_dict[val] = smooth_target
+            else:
+                self.encode_dict[val] = mean_target_class
+        
+        self.mean_target_all = mean_target_all
 
         if self.verbose:
             print('target encoder: fitting completed.')
