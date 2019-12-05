@@ -110,7 +110,7 @@ class CatEncoder:
     '''
     Scikit-learn API like categorical feature encoder
     USAGE:
-        target_encoder = CatEncoder('target', noise_level=0.5)
+        target_encoder = CatEncoder('target', noise=0.1)
         target_encoder.fit(x_train.feature , y_train)
         x_train.feature = target_encoder.transform(x_train.feature)
         x_test.feature = target_encoder.transform(x_test.feature)
@@ -120,7 +120,7 @@ class CatEncoder:
 
     def __init__(self, encoding='label', verbose=False, 
                  smoothing=False, noise=0, 
-                 dropna=False):
+                 handle_missing='value', handle_unknown='value'):
         assert encoding in self.ENCODINGS
         self.encoding = encoding
         self.verbose = verbose
@@ -128,7 +128,8 @@ class CatEncoder:
         self.k = 0
         self.f = 200
         self.noise = noise
-        self.dropna = dropna
+        self.handle_missing = handle_missing
+        self.handle_unknown = handle_unknown
 
     def fit(self, X, y=None):
         x = self._all2array(X.copy())
@@ -152,24 +153,30 @@ class CatEncoder:
 
         x = self._replace(x, self.encode_dict)
 
-        # deal with new class
-        if self.dropna:
-            new_idx = ~common_idx & ~nan_idx
+        # deal with unknown class
+        if self.handle_missing == 'return_nan':
+            unknown_idx = ~common_idx & ~nan_idx
+        elif self.handle_missing == 'value':
+            unknown_idx = ~common_idx
         else:
-            new_idx = ~common_idx
+            raise ValueError(self.handle_missing)
+
+        if self.handle_unknown == 'value':
+            if self.encoding == 'label':
+                x[unknown_idx] = max(self.encode_dict.values()) + 1
+            elif self.encoding == 'count':
+                x[unknown_idx] = 0
+            elif self.encoding == 'target':
+                x[unknown_idx] = self.mean_target_all
+            else:
+                raise ValueError(self.encoding)
+        elif self.handle_unknown == 'return_nan':
+            x[unknown_idx] = np.nan
+        else:
+            raise ValueError(self.handle_unknown)
+
+        x = self._to_numeric(x)
         
-        if self.encoding == 'label':
-            x[new_idx] = max(self.encode_dict.values()) + 1
-        elif self.encoding == 'count':
-            x[new_idx] = 0
-        elif self.encoding == 'target':
-            x[new_idx] = self.mean_target_all
-        else:
-            raise ValueError(self.encoding)
-
-        if self.encoding == 'target':
-            x = x.astype(np.float16)
-
         return self._add_noise(x, self.noise)
 
     def fit_transform(self, X, y=None):
@@ -186,14 +193,25 @@ class CatEncoder:
         else:
             pass
         
-        if self.dropna:
-            return x.squeeze()
+        if self.handle_missing == 'return_nan':
+            return x.astype(object).squeeze()
+        elif self.handle_missing == 'value':
+            return x.astype(str).squeeze()  # nan -> 'nan'
         else:
-            return x.astype(str).squeeze()  # nan -> new class
+            raise ValueError(self.handle_missing)
 
-    def _smooth_func(self, x):
+    def _sigmoid(self, x):
         '''Sigmoid like function (sigmoid when k=0 f=1)'''
         return 1 / (1 + np.exp((self.k - x)/self.f))
+
+    def _to_numeric(self, x):
+        if self.encoding == 'target':
+            return x.astype(np.float16)
+        else:
+            try:
+                return x.astype(np.int)
+            except:
+                return x.astype(np.float16)
     
     @staticmethod
     def _dropna(x):
@@ -201,7 +219,8 @@ class CatEncoder:
 
     @staticmethod
     def _replace(x, d):
-        return np.array([ d[v] if v in d.keys() else v for v in x ])
+        return np.array(
+            [d[v] if v in d.keys() else v for v in x], dtype=object)
 
     @staticmethod
     def _add_noise(x, noise_level):
@@ -239,7 +258,7 @@ class CatEncoder:
             n_class = np.sum(idx_class)
             mean_target_class = np.mean(y_train[idx_class])
             if self.smoothing:
-                w = self._smooth_func(n_class)
+                w = self._sigmoid(n_class)
                 smooth_target = w * mean_target_class + (1 - w) * mean_target_all
                 self.encode_dict[val] = smooth_target
             else:

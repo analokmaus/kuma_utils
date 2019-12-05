@@ -140,6 +140,9 @@ class CrossValidator:
             eval_metric=None, prediction='predict',
             transform=None, train_params={}, verbose=True):
 
+        if not isinstance(eval_metric, (list, tuple, set)):
+            eval_metric = [eval_metric]
+
         if n_splits is None:
             K = self.datasplit.n_splits
         else:
@@ -149,7 +152,7 @@ class CrossValidator:
             self.pred = np.zeros(len(X_test), dtype=np.float)
             x_test = X_test.copy()
         self.imps = np.zeros((X.shape[1], K))
-        self.scores = np.zeros(K)
+        self.scores = np.zeros((len(eval_metric), K))
 
         for fold_i, (train_idx, valid_idx) in enumerate(
             self.datasplit.split(X, y, group)):
@@ -190,14 +193,26 @@ class CrossValidator:
                     self.pred += self.predict(model, x_test) / K
             
             self.imps[:, fold_i] = model.get_feature_importances()
-            self.scores[fold_i] = eval_metric(y_valid, self.oof[valid_idx])
-
+            
+            for i, _metric in enumerate(eval_metric):
+                score = _metric(y_valid, self.oof[valid_idx])
+                self.scores[i, fold_i] = score
+            
             if verbose >= 0:
-                print(
-                    f'[CV] Fold {fold_i}: {self.scores[fold_i]:.5f} (iter {model.get_best_iteration()})')
-        print(
-            f'[CV] Overall: {np.mean(self.scores):.5f} ± {np.std(self.scores):.5f}')
+                log_str = f'[CV] Fold {fold_i}:'
+                log_str += ''.join([f' m{i}={self.scores[i, fold_i]:.5f}' for i in range(len(eval_metric))])
+                log_str += f' (iter {model.get_best_iteration()})'
+                print(log_str)
 
+        log_str = f'[CV] Overall:'
+        log_str += ''.join(
+            [f' m{i}={me:.5f}±{se:.5f}' for i, (me, se) in enumerate(zip(
+                np.mean(self.scores, axis=1), 
+                np.std(self.scores, axis=1)/np.sqrt(len(eval_metric))
+            ))]
+        )
+        print(log_str)
+        
     def plot_feature_importances(self, columns):
         plt.figure(figsize=(5, int(len(columns) / 3)))
         imps_mean = np.mean(self.imps, axis=1)
