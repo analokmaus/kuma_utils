@@ -283,12 +283,12 @@ class DistTransformer:
     '''
 
     TRANSFORMS = {
-        'standardization', 'min-max', 
+        'standard', 'min-max', 
         'box-cox', 'yeo-johnson', 
         'rankgauss'
     }
 
-    def __init__(self, transform='label', verbose=False, ):
+    def __init__(self, transform='standard', verbose=False, ):
         assert transform in self.TRANSFORMS
         self.t = transform
         self.verbose = verbose
@@ -296,7 +296,7 @@ class DistTransformer:
     def fit(self, X):
         x = self._all2array(X).copy().reshape(-1, 1)
 
-        if self.t == 'standardization':
+        if self.t == 'standard':
             self.transformer = StandardScaler()
         elif self.t == 'min-max':
             self.transformer = MinMaxScaler()
@@ -332,4 +332,3 @@ class DistTransformer:
             return x.values[:, 0]
         else:
             return x
-

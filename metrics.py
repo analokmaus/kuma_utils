@@ -99,9 +99,3 @@ class SeUnderSp(object):
             return 'se', se, self.maximize
         else:
             return '1-se', 1-se, self.maximize
-
-
-    
-
-
-        

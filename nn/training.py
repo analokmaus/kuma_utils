@@ -187,7 +187,7 @@ class NeuralTrainer:
                     print("[NT] Training stopped by overfit detector. ({}/{})".format(
                         epoch-self.earlystop.patience+1, start_epoch+epochs))
                     load_snapshots_to_model(str(snapshot_path), self.model)
-                    self.preds = self.predict(loader, verbose=verbose)
+                    self.preds = self.predict(loader_test, verbose=verbose)
                     break
 
                 continue
@@ -252,6 +252,9 @@ class NeuralTrainer:
             self.oof = self.predict(loader_valid, verbose=verbose)
 
     def predict(self, loader, path=None, verbose=True):
+        if loader is None:
+            print('[NT] Test data not found. Skipping prediction...')
+            return None
         if self.tta < 1:
             self.tta = 1
         batch_size = loader.batch_size
