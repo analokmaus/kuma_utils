@@ -63,6 +63,8 @@ class Trainer:
             self.best_iteration = self.model.get_best_iteration()
 
         elif self.model_type[:4] == 'LGBM':
+            if cat_features is None:
+                cat_features = []
             # train_data = Dataset(data=X, label=y, categorical_feature=cat_features)
             # valid_data = Dataset(data=X_valid, label=y_valid, categorical_feature=cat_features)
             self.model.fit(X, y, eval_set=[(X, y), (X_valid, y_valid)], 
@@ -144,7 +146,7 @@ class CrossValidator:
             eval_metric = [eval_metric]
 
         if n_splits is None:
-            K = self.datasplit.n_splits
+            K = self.datasplit.get_n_splits()
         else:
             K = n_splits
         self.oof = np.zeros(len(X), dtype=np.float)

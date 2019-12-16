@@ -16,6 +16,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, PowerTransformer, QuantileTransformer
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
 from scipy.stats import ks_2samp
 
 import warnings
@@ -332,3 +334,53 @@ class DistTransformer:
             return x.values[:, 0]
         else:
             return x
+
+
+'''
+Multivariate Imputation by Chained Equations (MICE) with NA flag
+'''
+
+class MICE(IterativeImputer):
+
+    def __init__(self, with_flag=True, **kwargs):
+        super(MICE, self).__init__(**kwargs)
+        self.with_flag = with_flag
+
+    def fit(self, X, y=None):
+        _X = self._add_nan_flag(X)
+        super().fit(_X, y)
+
+    def transform(self, X):
+        y_size = X.shape[1]
+        _X = self._add_nan_flag(X)
+        return super().transform(_X)[:, :y_size]
+        
+    def fit_transform(self, X, y=None):
+        return super().fit_transform(X, y)
+
+    @staticmethod
+    def _add_nan_flag(X):
+        if isinstance(X, (pd.DataFrame)):
+            _X = X.values
+        elif isinstance(X, np.ndarray):
+            _X = X
+        else:
+            raise TypeError(type(X))
+        
+        flags = np.zeros_like(_X, np.uint8)
+        for c in range(_X.shape[1]):
+            xc = _X[:, c]
+            flags[:, c] = (xc != xc).astype(np.uint8)
+
+        return np.concatenate([_X, flags], axis=1)
+        
+
+
+
+
+
+
+
+
+
+
