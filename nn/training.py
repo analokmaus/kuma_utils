@@ -187,7 +187,8 @@ class NeuralTrainer:
                     print("[NT] Training stopped by overfit detector. ({}/{})".format(
                         epoch-self.earlystop.patience+1, start_epoch+epochs))
                     load_snapshots_to_model(str(snapshot_path), self.model)
-                    self.preds = self.predict(loader_test, verbose=verbose)
+                    self.oof = self.predict(loader, verbose=verbose)
+                    self.pred = self.predict(loader_test, verbose=verbose)
                     break
 
                 continue
@@ -281,6 +282,6 @@ class NeuralTrainer:
 
     def info(self, input_shape):
         try:
-            summary(self.model, input_shape)
+            print(summary(self.model, input_shape))
         except:
             print('')

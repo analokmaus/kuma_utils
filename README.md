@@ -14,8 +14,11 @@
 
 ## 中身
 ```
-┣ preprocessing.py
+┣ visualization.py
     ┣ KS_test           - Kolmogorov-Smirnov検定
+    ┣ explore_dataframe - 自動でいい感じにEDAする奴
+
+┣ preprocessing.py
     ┣ CatEncoder        - カテゴリカル変数をいろいろな方法でエンコードする奴
     ┣ DistTransformer   - データの分布を変換する奴
 

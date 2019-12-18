@@ -69,41 +69,6 @@ def reduce_mem_usage(df):
     return df
 
 
-def KS_test(train, test, plot_rejected=False, plot_accepted=False, thres=0.05):
-    '''
-    Kolmogorov-Smirnov test
-    '''
-    assert isinstance(train, pd.DataFrame)
-    assert type(train) == type(test)
-
-    h0_accepted = []
-    h0_rejected = []
-    
-    for col in test.columns:
-        d, p = ks_2samp(train[col], test[col])
-
-        if p >= thres:
-            h0_accepted.append(col)
-            if plot_accepted:
-                plt.figure(figsize=(6, 3))
-                plt.title("Kolmogorov-Smirnov test\n"
-                          "feature: {}, statistics: {:.5f}, pvalue: {:5f}".format(col, d, p))
-                sns.kdeplot(train[col], color='blue', shade=True, label='Train')
-                sns.kdeplot(test[col], color='green', shade=True, label='Test')
-                plt.show()
-        else:  # pvalue < thres
-            h0_rejected.append(col)
-            if plot_rejected:
-                plt.figure(figsize=(6, 3))
-                plt.title("Kolmogorov-Smirnov test\n"
-                          "feature: {}, statistics: {:.5f}, pvalue: {:5f}".format(col, d, p))
-                sns.kdeplot(train[col], color='blue', shade=True, label='Train')
-                sns.kdeplot(test[col], color='green', shade=True, label='Test')
-                plt.show()
-
-    return h0_accepted, h0_rejected
-
-
 '''
 Categorical encoder
 '''
@@ -356,7 +321,9 @@ class MICE(IterativeImputer):
         return super().transform(_X)[:, :y_size]
         
     def fit_transform(self, X, y=None):
-        return super().fit_transform(X, y)
+        y_size = X.shape[1]
+        _X = self._add_nan_flag(X)
+        return super().fit_transform(X, y)[:, :y_size]
 
     @staticmethod
     def _add_nan_flag(X):
@@ -372,15 +339,4 @@ class MICE(IterativeImputer):
             xc = _X[:, c]
             flags[:, c] = (xc != xc).astype(np.uint8)
 
-        return np.concatenate([_X, flags], axis=1)
-        
-
-
-
-
-
-
-
-
-
-
+        return np.concatenate([_X, flags], axis=1)     
