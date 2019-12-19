@@ -72,6 +72,9 @@ def train_test_venn(train, test):
     common_val = train & test
     train_val = train - common_val
     test_val = test - common_val
+    print(f'train unique: {len(train_val)}')
+    print(f'test unique: {len(test_val)}')
+    print(f'common unique: {len(common_val)}')
     return venn2(subsets=(
         len(train_val), 
         len(test_val),
@@ -88,11 +91,13 @@ def is_categorical(x, count=10):
         return False
 
 
-def not_null(x):
+def dropna(x):
     return x[x==x]
     
 
-def explore_dataframe(train, test=None, categorical_threshold=10):
+def explore_dataframe(train, test=None, 
+                      categorical_threshold=10, 
+                      plot=True, save_plot=None):
     assert isinstance(train, pd.DataFrame)
     if test is not None:
         assert isinstance(test, pd.DataFrame)
@@ -110,6 +115,11 @@ def explore_dataframe(train, test=None, categorical_threshold=10):
         print(f'common columns:\n{sorted(common_columns)}({len(common_columns)})')
         target_columns = common_columns
 
+    plot_x = int(np.sqrt(len(target_columns)))
+    plot_y = int(np.ceil(len(target_columns) / plot_x))
+    if plot:
+        plt.figure(figsize=(plot_x*8, plot_y*4))
+
     for icol, col in enumerate(target_columns):
         res_str = f'\n[{icol}/{col}]: {train[col].dtype}\n'
         
@@ -120,39 +130,32 @@ def explore_dataframe(train, test=None, categorical_threshold=10):
             test_vals = test[col].values.copy()
             test_null = test_vals != test_vals
             res_str += f'test_null: {np.sum(test_null)}({np.mean(test_null)*100:.2f}%)\n'
-        
+
         try:
+            plt.subplot(plot_y, plot_x * 2, 2*icol+1)
+            plt.title(res_str)
+            sns.distplot(train_vals[~train_null], kde=False, norm_hist=True, 
+                            rug=True, label='train')
+            if test is not None:
+                sns.distplot(test_vals[~test_null], kde=False, norm_hist=True, 
+                            rug=True, label='test')
+            plt.legend()
+
             if is_categorical(train_vals, categorical_threshold):
                 train_vals = catenc.fit_transform(train_vals)
+                train_uvals = dropna(np.unique(train_vals))
                 res_str += 'is categorical'
                 if test is not None:
-                    fig_len = 2
-                    plt.figure(figsize=(6, fig_len*3))
                     test_vals = catenc.transform(test_vals)
-                    plt.subplot(fig_len, 1, 1)
-                    plt.title(res_str)
-                    train_test_venn(np.unique(train_vals), np.unique(test_vals))
-                else:
-                    fig_len = 1
-                    plt.figure(figsize=(6, fig_len*3))
-                    plt.subplot(fig_len, 1, 1)
-                    plt.title(res_str)
-            else:
-                fig_len = 1
-                plt.subplot(fig_len, 1, 1)
-                plt.title(res_str)
-
-            plt.subplot(fig_len, 1, fig_len)
-            sns.distplot(train_vals[~train_null], kde=False, norm_hist=True, label='train')
-            if test is not None:
-                sns.distplot(test_vals[~test_null], kde=False, norm_hist=True, label='test')
-            plt.legend()
-            plt.show()
-        except:
-            res_str += 'Error Occured'
+                    plt.subplot(plot_y, plot_x * 2, 2*icol+2)
+                    test_uvals = dropna(np.unique(test_vals))
+                    train_test_venn(train_uvals, test_uvals)
+            
             print(res_str)
-        
-        
-        
 
-
+        except:
+            res_str += 'plot failed'
+            print(res_str)
+        plt.tight_layout()
+    if save_plot is not None:
+        plt.savefig(save_plot)

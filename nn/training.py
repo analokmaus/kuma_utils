@@ -90,9 +90,9 @@ class NeuralTrainer:
             logger = DummyLogger('')
 
         if eval_metric is None:
-            eval_metric = lambda x, y: criterion(x, y).item()
+            eval_metric = lambda x, y: -1 * criterion(x, y).item()
             if verbose:
-                print(f'[NT] eval_metric is not set. criterion will be used instead.')
+                print(f'[NT] eval_metric is not set. inversed criterion will be used instead.')
 
         start_epoch = 0
         self.log = defaultdict(dict)
@@ -139,7 +139,7 @@ class NeuralTrainer:
 
                 if _epoch == 0 and batch_i == 0:
                     # Save output dimension in the first run
-                    self.out_dim = _y.shape[1]
+                    self.out_dim = _y.shape[1:]
 
                 if batches_done % grad_accumulations == 0:
                     # Accumulates gradient before each step
@@ -260,7 +260,7 @@ class NeuralTrainer:
             self.tta = 1
         batch_size = loader.batch_size
         prediction = np.zeros(
-            (len(loader.dataset), self.out_dim), dtype=np.float16)
+            (len(loader.dataset), *self.out_dim), dtype=np.float16)
 
         self.model.eval()
         with torch.no_grad():

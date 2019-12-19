@@ -26,6 +26,7 @@
     ┣ Trainer           - いろいろなモデルを学習しやすくするためのラッパー
     ┣ CrossValidator    - CVをシュッと行い、結果のセーブやロードも可能
     ┣ AdvFeatureSelection   - Adversarial validationを使った特徴量選択
+    ┣ StratifiedGroupKFold  - 層別化したGroupKFold
 
 ┣ metrics.py
     ┣ SeUnderSp         - 特異度固定時の感度を最大する目的関数
