@@ -250,7 +250,10 @@ class NeuralTrainer:
             print(f"[NT] Best score is {self.earlystop.best_score:.6f}")
             load_snapshots_to_model(str(snapshot_path), self.model)
             self.pred = self.predict(loader_test, verbose=verbose)
-            self.oof = self.predict(loader_valid, verbose=verbose)
+            if loader_valid is None:
+                self.oof = self.predict(loader, verbose=verbose)
+            else:
+                self.oof = self.predict(loader_valid, verbose=verbose)
 
     def predict(self, loader, path=None, verbose=True):
         if loader is None:

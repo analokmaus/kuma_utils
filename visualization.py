@@ -120,7 +120,7 @@ def explore_dataframe(train, test=None,
     if plot:
         plt.figure(figsize=(plot_x*8, plot_y*4))
 
-    for icol, col in enumerate(target_columns):
+    for icol, col in enumerate(sorted(target_columns)):
         res_str = f'\n[{icol}/{col}]: {train[col].dtype}\n'
         
         train_vals = train[col].values.copy()
@@ -159,3 +159,9 @@ def explore_dataframe(train, test=None,
         plt.tight_layout()
     if save_plot is not None:
         plt.savefig(save_plot)
+
+
+def plot_correlation(df):
+    size_xy = int(len(df.columns)/3)
+    plt.figure(figsize=(size_xy, size_xy))
+    return sns.heatmap(df.corr())
