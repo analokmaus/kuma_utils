@@ -165,13 +165,6 @@ class NeuralTrainer:
             self.log['train']['loss'].append(avg_loss_train)
             self.log['train']['score'].append(avg_score_train)
 
-            if verbose >= 2:
-                current_time = time.strftime(
-                    '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 3 else ''
-                log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch + epochs}] T\t'
-                log_str += f"loss={avg_loss_train:.6f}\t score={avg_score_train:.6f}"
-                print(log_str)
-
 
             '''
             No validation set
@@ -182,6 +175,8 @@ class NeuralTrainer:
                 if self.earlystop(early_stopping_target): 
                     save_snapshots(epoch, 
                         self.model, self.optimizer, self.scheduler, snapshot_path)
+                else:
+                    log_str += f'*({self.earlystop.counter})'
 
                 if self.earlystop.early_stop:
                     print("[NT] Training stopped by overfit detector. ({}/{})".format(
@@ -192,6 +187,14 @@ class NeuralTrainer:
                     break
 
                 continue
+
+            # Show log of training
+            if verbose >= 2:
+                current_time = time.strftime(
+                    '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 3 else ''
+                log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch + epochs}] T\t'
+                log_str += f"loss={avg_loss_train:.6f}\t score={avg_score_train:.6f}"
+                print(log_str)
 
 
             '''
@@ -217,6 +220,7 @@ class NeuralTrainer:
                 avg_score_valid = np.average(valid_scores)
                 self.log['valid']['loss'].append(avg_loss_valid)
                 self.log['valid']['score'].append(avg_score_valid)
+                
                 current_time = time.strftime(
                     '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 3 else ''
                 log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch + epochs}] V\t'

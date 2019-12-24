@@ -48,12 +48,14 @@ def load_snapshots_to_model(path, model=None, optimizer=None, scheduler=None):
         scheduler.load_state_dict(checkpoint['scheduler'])
 
 
-def load_pretrained(path, model):
+def load_pretrained(path, model, ignore=[]):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     pretrained_weights = torch.load(path, map_location=device)['model']
     model_weights = model.state_dict()
     for layer in model_weights.keys():
         if layer in pretrained_weights.keys():
+            if layer in ignore:
+                continue
             model_weights[layer] = pretrained_weights[layer]
     model.load_state_dict(model_weights)
 

@@ -84,9 +84,19 @@ class Trainer:
         return self.best_iteration
 
     def get_feature_importances(self):
-        try:
+        if self.model_type in ['CatBoostRegressor', 'CatBoostClassifier',
+                               'LGBMRegressor', 'LGBMClassifier', 
+                               'RandomForestRegressor', 'RandomForestClassifier']: 
             return self.model.feature_importances_
-        except:
+        elif self.model_type in ['LinearRegression', 'LogisticRegression',
+                                 'Ridge', 'Lasso']:
+            return self.model.coef_
+        elif self.model_type in ['SVR', 'SVC']:
+            if self.model.get_params()['kernel'] == 'linear':
+                return self.model.coef_
+            else:
+                return 0
+        else:
             return 0
     
     def get_params(self):
