@@ -19,20 +19,48 @@ except:
 
 
 '''
-Automation
+Misc.
 '''
 
-def set_requires_grad(model, requires_grad=True):
-    for param in model.parameters():
+def set_requires_grad(model, requires_grad=True, verbose=True):
+    counter = 0
+    for i, param in enumerate(model.parameters()):
+        if param.requires_grad != requires_grad:
+            counter += 1
         param.requires_grad = requires_grad
+    if verbose:
+        print(f'{counter}/{i+1} params is set to {requires_grad}.')
+        
+
+'''
+Stopper
+'''
+
+class DummyStopper:
+    ''' No stopper '''
+
+    def __init__(self):
+        pass
+
+    def __call__(self, val_loss):
+        return True
+
+    def stop(self):
+        return False
+
+    def state(self):
+        return 0, 0
+
+    def score(self):
+        return 0
 
 
 class EarlyStopping:
     '''
     Early stops the training if validation loss doesn't improve after a given patience.
-
     patience: int   = how long to wait after last time validation loss improved
     '''
+
     def __init__(self, patience=5, maximize=False):
         self.patience = patience
         self.counter = 0
@@ -45,9 +73,7 @@ class EarlyStopping:
             self.coef = -1
 
     def __call__(self, val_loss):
-
         score = self.coef * val_loss
-
         if self.best_score is None:
             self.best_score = score
             return True
@@ -61,46 +87,79 @@ class EarlyStopping:
             self.counter = 0
             return True
 
+    def stop(self):
+        return self.early_stop
+
+    def state(self):
+        return self.counter, self.patience
+        
+    def score(self):
+        return self.best_score
+
+
+'''
+Event
+'''
+
+class DummyEvent:
+    ''' Dummy event does nothing '''
+
+    def __init__(self):
+        pass
+
+    def __call__(self, model, optimizer, scheduler, stopper, 
+                 criterion, eval_metric, i_epoch, log):
+        return model, optimizer, scheduler, stopper, criterion, eval_metric
+
+
+'''
+Trainer
+'''
 
 class NeuralTrainer:
+    '''
+    Trainer for pytorch models
+    '''
 
-    def __init__(self, model, optimizer, scheduler, 
-                 stopper=None):
+    def __init__(self, model, optimizer, scheduler, device=None, tta=1):
+        if device is None:
+            device = torch.device(
+                "cuda" if torch.cuda.is_available() else "cpu")
+
         self.model = model
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
         self.model.to(self.device)
-
         self.optimizer = optimizer
         self.scheduler = scheduler
-        self.earlystop = stopper
-        
-        # General params
-        self.tta = 1
 
     def train(self, 
-              loader, criterion, epochs, snapshot_path, 
-              loader_valid=None, loader_test=None,
-              logger=None, verbose=True, 
-              eval_metric=None, resume=False,
+              loader, criterion, num_epochs, snapshot_path, 
+              loader_valid=None, loader_test=None, tta=1,
+              eval_metric=None, 
+              logger=None, event=None, stopper=None,
+              resume=False,
               grad_accumulations=1, eval_interval=1, 
-              log_interval=10, name=''):
+              log_interval=10, name='', 
+              verbose=True):
 
         if logger is None:
             logger = DummyLogger('')
-
+        if event is None:
+            event = DummyEvent()
+        if stopper is None:
+            stopper = DummyStopper()
         if eval_metric is None:
             eval_metric = lambda x, y: -1 * criterion(x, y).item()
             if verbose:
                 print(f'[NT] eval_metric is not set. inversed criterion will be used instead.')
 
         start_epoch = 0
+        self.tta = tta # test time augmentation
         self.log = defaultdict(dict)
         self.log['train']['loss'] = []
         self.log['train']['score'] = []
         self.log['valid']['loss'] = []
         self.log['valid']['score'] = []
-
 
         if resume:
             load_snapshots_to_model(snapshot_path, 
@@ -114,13 +173,19 @@ class NeuralTrainer:
             if verbose:
                 print(f'[NT] {torch.cuda.device_count()} gpus found.')
 
-        _align = len(str(start_epoch+epochs))
-
-        for _epoch, epoch in enumerate(range(start_epoch, start_epoch + epochs)):
+        _align = len(str(start_epoch+num_epochs))
+        
+        for _epoch, epoch in enumerate(range(start_epoch, start_epoch+num_epochs)):
             start_time = time.time()
             self.scheduler.step()
-            
 
+            '''
+            Run event
+            '''
+            self.model, self.optimizer, self.scheduler, stopper, criterion, eval_metric = \
+                event(self.model, self.optimizer, self.scheduler, 
+                      stopper, criterion, eval_metric, _epoch, self.log)
+            
             '''
             Train
             '''
@@ -129,7 +194,7 @@ class NeuralTrainer:
             self.model.train()
 
             for batch_i, (X, y) in enumerate(loader):
-                batches_done = len(loader) * epochs + batch_i
+                batches_done = len(loader) * num_epochs + batch_i
 
                 X = X.to(self.device)
                 _y = self.model(X)
@@ -165,6 +230,10 @@ class NeuralTrainer:
             self.log['train']['loss'].append(avg_loss_train)
             self.log['train']['score'].append(avg_score_train)
 
+            current_time = time.strftime(
+                '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 3 else ''
+            log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch+num_epochs}] T\t'
+            log_str += f"loss={avg_loss_train:.6f}\t score={avg_score_train:.6f}"
 
             '''
             No validation set
@@ -172,15 +241,19 @@ class NeuralTrainer:
             if loader_valid is None:
                 early_stopping_target = avg_score_train
 
-                if self.earlystop(early_stopping_target): 
+                if stopper(early_stopping_target): # score updated
                     save_snapshots(epoch, 
                         self.model, self.optimizer, self.scheduler, snapshot_path)
                 else:
-                    log_str += f'*({self.earlystop.counter})'
+                    log_str += f'*({stopper.state()[0]})'
 
-                if self.earlystop.early_stop:
+                if verbose >= 2:
+                    print(log_str)
+
+                if stopper.stop():
                     print("[NT] Training stopped by overfit detector. ({}/{})".format(
-                        epoch-self.earlystop.patience+1, start_epoch+epochs))
+                        epoch-stopper.state()[1]+1, start_epoch+num_epochs))
+                    print(f"[NT] Best score is {stopper.score():.6f}")
                     load_snapshots_to_model(str(snapshot_path), self.model)
                     self.oof = self.predict(loader, verbose=verbose)
                     self.pred = self.predict(loader_test, verbose=verbose)
@@ -188,25 +261,18 @@ class NeuralTrainer:
 
                 continue
 
-            # Show log of training
-            if verbose >= 2:
-                current_time = time.strftime(
-                    '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 3 else ''
-                log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch + epochs}] T\t'
-                log_str += f"loss={avg_loss_train:.6f}\t score={avg_score_train:.6f}"
-                print(log_str)
-
-
             '''
             Validation
             '''
+            if verbose >= 2:  # Show log of training
+                print(log_str)
+
             if epoch % eval_interval == 0:
                 valid_losses = []
                 valid_scores = []
                 self.model.eval()
                 with torch.no_grad():
                      for X, y in loader_valid:
-
                         X = X.to(self.device)
                         _y = self.model(X)
                         y = y.to(self.device)
@@ -223,7 +289,7 @@ class NeuralTrainer:
                 
                 current_time = time.strftime(
                     '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 3 else ''
-                log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch + epochs}] V\t'
+                log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch+num_epochs}] V\t'
                 log_str += f"loss={avg_loss_valid:.6f}\t score={avg_score_valid:.6f}"
                 evaluation_metrics = [
                     (f"val_accuracy_{name}", avg_score_valid),
@@ -232,26 +298,26 @@ class NeuralTrainer:
                 logger.list_of_scalars_summary(evaluation_metrics, epoch)
 
                 early_stopping_target = avg_score_valid
-                if self.earlystop(early_stopping_target):  # score updated
+                if stopper(early_stopping_target):  # score updated
                     save_snapshots(
                         epoch, self.model, self.optimizer, self.scheduler, snapshot_path)
                 else:
-                    log_str += f'*({self.earlystop.counter})'
+                    log_str += f'*({stopper.state()[0]})'
 
                 if verbose:
                     print(log_str)
 
-            if self.earlystop.early_stop:
+            if stopper.stop():
                 print("[NT] Training stopped by overfit detector. ({}/{})".format(
-                    epoch-self.earlystop.patience+1, start_epoch+epochs))
-                print(f"[NT] Best score is {self.earlystop.best_score:.6f}")
+                    epoch-stopper.state()[1]+1, start_epoch+num_epochs))
+                print(f"[NT] Best score is {stopper.score():.6f}")
                 load_snapshots_to_model(str(snapshot_path), self.model)
                 self.pred = self.predict(loader_test, verbose=verbose)
                 self.oof = self.predict(loader_valid, verbose=verbose)
                 break
 
         else: # Not stopped by overfit detector
-            print(f"[NT] Best score is {self.earlystop.best_score:.6f}")
+            print(f"[NT] Best score is {stopper.score():.6f}")
             load_snapshots_to_model(str(snapshot_path), self.model)
             self.pred = self.predict(loader_test, verbose=verbose)
             if loader_valid is None:
@@ -261,7 +327,7 @@ class NeuralTrainer:
 
     def predict(self, loader, path=None, verbose=True):
         if loader is None:
-            print('[NT] Test data not found. Skipping prediction...')
+            print('[NT] No data loaded. Skipping prediction...')
             return None
         if self.tta < 1:
             self.tta = 1
