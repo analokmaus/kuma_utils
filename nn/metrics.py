@@ -6,7 +6,10 @@ from sklearn.metrics import roc_auc_score
 def auc(_y, y):
     _y = np.squeeze(_y.data.cpu().numpy())
     y = np.squeeze(y.data.cpu().numpy())
-    return roc_auc_score(y, _y)
+    try:
+        return roc_auc_score(y, _y)
+    except:
+        return 0.5
 
 
 def accuracy(_y, y):

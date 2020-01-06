@@ -78,7 +78,7 @@ class TabularNet(nn.Module):
             x = torch.cat(x, 1)
             x = self.emb_dropout_layer(x)
         else:
-            x = torch.Tensor()
+            x = torch.Tensor().to(X.device)
 
         if self.lin_len > 0:
             x = torch.cat([x, X[:, self.lin_idx]], 1)

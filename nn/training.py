@@ -22,14 +22,23 @@ except:
 Misc.
 '''
 
-def set_requires_grad(model, requires_grad=True, verbose=True):
-    counter = 0
+def scan_requires_grad(model):
+    frozen = 0
+    unfrozen = 0
     for i, param in enumerate(model.parameters()):
-        if param.requires_grad != requires_grad:
-            counter += 1
+        if param.requires_grad:
+            unfrozen += 1
+        else:
+            frozen += 1
+    return frozen, unfrozen
+
+
+def set_requires_grad(model, requires_grad=True, verbose=True):
+    for i, param in enumerate(model.parameters()):
         param.requires_grad = requires_grad
     if verbose:
-        print(f'{counter}/{i+1} params is set to {requires_grad}.')
+        frozen, unfrozen = scan_requires_grad(model)
+        print(f'{frozen}/{frozen+unfrozen} params is frozen.')
         
 
 '''
@@ -140,6 +149,7 @@ class NeuralTrainer:
               resume=False,
               grad_accumulations=1, eval_interval=1, 
               log_interval=10, name='', 
+              predict_oof=True, predict_pred=True,
               verbose=True):
 
         if logger is None:
@@ -194,7 +204,7 @@ class NeuralTrainer:
             self.model.train()
 
             for batch_i, (X, y) in enumerate(loader):
-                batches_done = len(loader) * num_epochs + batch_i
+                batches_done = len(loader) * epoch + batch_i
 
                 X = X.to(self.device)
                 _y = self.model(X)
@@ -232,8 +242,8 @@ class NeuralTrainer:
 
             current_time = time.strftime(
                 '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 3 else ''
-            log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch+num_epochs}] T\t'
-            log_str += f"loss={avg_loss_train:.6f}\t score={avg_score_train:.6f}"
+            log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch+num_epochs}] Trn '
+            log_str += f"loss={avg_loss_train:.6f} score={avg_score_train:.6f}"
 
             '''
             No validation set
@@ -255,8 +265,10 @@ class NeuralTrainer:
                         epoch-stopper.state()[1]+1, start_epoch+num_epochs))
                     print(f"[NT] Best score is {stopper.score():.6f}")
                     load_snapshots_to_model(str(snapshot_path), self.model)
-                    self.oof = self.predict(loader, verbose=verbose)
-                    self.pred = self.predict(loader_test, verbose=verbose)
+                    if predict_oof:
+                        self.oof = self.predict(loader, verbose=verbose)
+                    if predict_pred:
+                        self.pred = self.predict(loader_test, verbose=verbose)
                     break
 
                 continue
@@ -289,8 +301,8 @@ class NeuralTrainer:
                 
                 current_time = time.strftime(
                     '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 3 else ''
-                log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch+num_epochs}] V\t'
-                log_str += f"loss={avg_loss_valid:.6f}\t score={avg_score_valid:.6f}"
+                log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch+num_epochs}] Val '
+                log_str += f"loss={avg_loss_valid:.6f} score={avg_score_valid:.6f}"
                 evaluation_metrics = [
                     (f"val_accuracy_{name}", avg_score_valid),
                     (f"valid_loss_{name}", avg_loss_valid)
@@ -312,18 +324,22 @@ class NeuralTrainer:
                     epoch-stopper.state()[1]+1, start_epoch+num_epochs))
                 print(f"[NT] Best score is {stopper.score():.6f}")
                 load_snapshots_to_model(str(snapshot_path), self.model)
-                self.pred = self.predict(loader_test, verbose=verbose)
-                self.oof = self.predict(loader_valid, verbose=verbose)
+                if predict_oof:
+                    self.oof = self.predict(loader_valid, verbose=verbose)
+                if predict_pred:
+                    self.pred = self.predict(loader_test, verbose=verbose)
                 break
 
         else: # Not stopped by overfit detector
             print(f"[NT] Best score is {stopper.score():.6f}")
             load_snapshots_to_model(str(snapshot_path), self.model)
-            self.pred = self.predict(loader_test, verbose=verbose)
-            if loader_valid is None:
-                self.oof = self.predict(loader, verbose=verbose)
-            else:
-                self.oof = self.predict(loader_valid, verbose=verbose)
+            if predict_oof:
+                if loader_valid is None:
+                    self.oof = self.predict(loader, verbose=verbose)
+                else:
+                    self.oof = self.predict(loader_valid, verbose=verbose)
+            if predict_pred:
+                self.pred = self.predict(loader_test, verbose=verbose)
 
     def predict(self, loader, path=None, verbose=True):
         if loader is None:
