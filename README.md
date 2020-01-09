@@ -14,6 +14,8 @@
 
 ## 中身
 ```
+┣ common.py             - 様々な細かい便利ツール
+
 ┣ visualization.py
     ┣ KS_test           - Kolmogorov-Smirnov検定
     ┣ explore_dataframe - 自動でいい感じにEDAする奴

@@ -9,6 +9,7 @@ from tqdm import tqdm
 from copy import deepcopy, copy
 import traceback
 import json
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -22,10 +23,24 @@ except:
 import seaborn as sns
 from scipy.stats import ks_2samp
 
-import warnings
-
 from .preprocessing import CatEncoder
+from .common import KumaNumpy as kn
 
+
+'''
+Misc.
+'''
+
+def is_categorical(x, count=10):
+    if kn.nunique(x) <= count:
+        return True
+    else:
+        return False
+
+
+'''
+Visualization
+'''
 
 def KS_test(train, test, plot_rejected=False, plot_accepted=False, thres=0.05):
     '''
@@ -82,17 +97,6 @@ def train_test_venn(train, test):
         ),
         set_labels=('train', 'test')
     )
-
-
-def is_categorical(x, count=10):
-    if len(np.unique(x)) <= count:
-        return True
-    else:
-        return False
-
-
-def dropna(x):
-    return x[x==x]
     
 
 def explore_dataframe(train, test=None, 
@@ -123,40 +127,41 @@ def explore_dataframe(train, test=None,
     for icol, col in enumerate(sorted(target_columns)):
         res_str = f'\n[{icol}/{col}]: {train[col].dtype}\n'
         
-        train_vals = train[col].values.copy()
+        # Convert all values to numeric if possible
+        train_vals = kn.to_numeric(kn.clean(train[col].values.copy()))
         train_null = train_vals != train_vals
         res_str += f'train_null: {np.sum(train_null)}({np.mean(train_null)*100:.2f}%)\n'
         if test is not None:
-            test_vals = test[col].values.copy()
+            test_vals = kn.to_numeric(kn.clean(test[col].values.copy()))
             test_null = test_vals != test_vals
             res_str += f'test_null: {np.sum(test_null)}({np.mean(test_null)*100:.2f}%)\n'
+
+        print(res_str)
+
+        if is_categorical(train_vals, categorical_threshold):
+            train_vals = catenc.fit_transform(train_vals)
+            train_uvals = kn.dropna(np.unique(train_vals))
+            print(catenc.encode_dict)
+            res_str += 'is categorical'
+            if test is not None:
+                test_vals = catenc.transform(test_vals)
+                plt.subplot(plot_y, plot_x * 2, 2*icol+2)
+                test_uvals = kn.dropna(np.unique(test_vals))
+                train_test_venn(train_uvals, test_uvals)
 
         try:
             plt.subplot(plot_y, plot_x * 2, 2*icol+1)
             plt.title(res_str)
-            sns.distplot(train_vals[~train_null], kde=False, norm_hist=True, 
-                            rug=True, label='train')
+            sns.distplot(train_vals[~train_null], kde=False, norm_hist=True,
+                        rug=True, label='train')
             if test is not None:
-                sns.distplot(test_vals[~test_null], kde=False, norm_hist=True, 
+                sns.distplot(test_vals[~test_null], kde=False, norm_hist=True,
                             rug=True, label='test')
             plt.legend()
-
-            if is_categorical(train_vals, categorical_threshold):
-                train_vals = catenc.fit_transform(train_vals)
-                train_uvals = dropna(np.unique(train_vals))
-                res_str += 'is categorical'
-                if test is not None:
-                    test_vals = catenc.transform(test_vals)
-                    plt.subplot(plot_y, plot_x * 2, 2*icol+2)
-                    test_uvals = dropna(np.unique(test_vals))
-                    train_test_venn(train_uvals, test_uvals)
-            
-            print(res_str)
-
         except:
-            res_str += 'plot failed'
-            print(res_str)
+            print('plot skipped.')
         plt.tight_layout()
+
     if save_plot is not None:
         plt.savefig(save_plot)
 

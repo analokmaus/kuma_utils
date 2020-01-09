@@ -43,6 +43,14 @@ def set_requires_grad(model, requires_grad=True, verbose=True):
 
 '''
 Stopper
+
+# Methods
+- __call__() : bool     = return whether score is updated
+- stop() : bool         = return whether to stop training or not
+- state() : int, int    = return current / total
+- score() : float       = return best score
+- freeze()              = update score but never stop
+- unfreeze()            = unset freeze()
 '''
 
 class DummyStopper:
@@ -61,7 +69,7 @@ class DummyStopper:
         return 0, 0
 
     def score(self):
-        return 0
+        return 0.0
 
 
 class EarlyStopping:
@@ -80,6 +88,7 @@ class EarlyStopping:
             self.coef = 1
         else:
             self.coef = -1
+        self.frozen = False
 
     def __call__(self, val_loss):
         score = self.coef * val_loss
@@ -87,7 +96,8 @@ class EarlyStopping:
             self.best_score = score
             return True
         elif score < self.best_score:
-            self.counter += 1
+            if not self.frozen:
+                self.counter += 1
             if self.counter >= self.patience:
                 self.early_stop = True
             return False
@@ -104,6 +114,12 @@ class EarlyStopping:
         
     def score(self):
         return self.best_score
+
+    def freeze(self):
+        self.frozen = True
+
+    def unfreeze(self):
+        self.frozen = False
 
 
 '''
@@ -254,8 +270,9 @@ class NeuralTrainer:
                 if stopper(early_stopping_target): # score updated
                     save_snapshots(epoch, 
                         self.model, self.optimizer, self.scheduler, snapshot_path)
+                    log_str += f' best={stopper.score():.6f}'
                 else:
-                    log_str += f'*({stopper.state()[0]})'
+                    log_str += f' best={stopper.score():.6f}*({stopper.state()[0]})'
 
                 if verbose >= 2:
                     print(log_str)
@@ -313,8 +330,9 @@ class NeuralTrainer:
                 if stopper(early_stopping_target):  # score updated
                     save_snapshots(
                         epoch, self.model, self.optimizer, self.scheduler, snapshot_path)
+                    f' best={stopper.score():.6f}'
                 else:
-                    log_str += f'*({stopper.state()[0]})'
+                    log_str += f' best={stopper.score():.6f}*({stopper.state()[0]})'
 
                 if verbose:
                     print(log_str)

@@ -7,11 +7,10 @@ import re
 from pathlib import Path
 from copy import deepcopy, copy
 import traceback
+import warnings
 
 import numpy as np
 import pandas as pd
-
-import warnings
 
 from sklearn.metrics import roc_auc_score, confusion_matrix
 from .preprocessing import DistTransformer
@@ -24,13 +23,14 @@ Custom metrics
 class SeUnderSp(object):
     '''
     Maximize sensitivity under specific specificity threshold
-    USAGE:
-        # general
-        SeUnderSp(0.9).test(target, pred)
-        # catboost
-        ..., eval_metric=SeUnderSp(0.9), ...
-        # lightgbm
-        ..., eval_metric=SeUnderSp(0.9).lgbm, ...
+
+    # Usage
+    - general
+    SeUnderSp(0.9).test(target, pred)
+    - catboost
+    ..., eval_metric=SeUnderSp(0.9), ...
+    - lightgbm
+    ..., eval_metric=SeUnderSp(0.9).lgbm, ...
     '''
     def __init__(self, sp=0.9, maximize=True):
         self.sp = 0.9

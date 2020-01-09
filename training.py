@@ -11,14 +11,13 @@ import traceback
 import pickle
 import random
 from collections import Counter, defaultdict
+import warnings
 
 import numpy as np
 import pandas as pd
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-
-import warnings
 
 from catboost import CatBoostRegressor, CatBoostClassifier, Pool
 from lightgbm import LGBMRegressor, LGBMClassifier, Dataset
@@ -34,9 +33,10 @@ Training automation
 class Trainer:
     '''
     Make machine learning eazy again!
-    USAGE:
-        model = Trainer(CatBoostClassifier(**CAT_PARAMS))
-        model.train(x_train, y_train, x_valid, y_valid, fit_params={})
+
+    # Usage
+    model = Trainer(CatBoostClassifier(**CAT_PARAMS))
+    model.train(x_train, y_train, x_valid, y_valid, fit_params={})
     '''
 
     MODELS = {
@@ -85,8 +85,8 @@ class Trainer:
 
     def get_feature_importances(self):
         if self.model_type in ['CatBoostRegressor', 'CatBoostClassifier',
-                               'LGBMRegressor', 'LGBMClassifier', 
-                               'RandomForestRegressor', 'RandomForestClassifier']: 
+                               'LGBMRegressor', 'LGBMClassifier',
+                               'RandomForestRegressor', 'RandomForestClassifier']:
             return self.model.feature_importances_
         elif self.model_type in ['LinearRegression', 'LogisticRegression',
                                  'Ridge', 'Lasso']:
@@ -122,15 +122,16 @@ class Trainer:
 class CrossValidator:
     '''
     Make cross validation beautiful again?
-    USAGE:
-        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
-        cat_cv = CrossValidator(CatBoostClassifier(**CAT_PARAMS), skf)
-        cat_cv.run(
-            X, y, x_test, 
-            eval_metric=roc_auc_score, prediction='predict', 
-            train_params={'cat_features': CAT_IDXS, 'fit_params': CAT_FIT_PARAMS},
-            verbose=0
-        )
+    
+    # Usage
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
+    cat_cv = CrossValidator(CatBoostClassifier(**CAT_PARAMS), skf)
+    cat_cv.run(
+        X, y, x_test, 
+        eval_metric=roc_auc_score, prediction='predict', 
+        train_params={'cat_features': CAT_IDXS, 'fit_params': CAT_FIT_PARAMS},
+        verbose=0
+    )
     '''
 
     def __init__(self, model, datasplit):
@@ -164,7 +165,7 @@ class CrossValidator:
         self.oof = np.zeros(len(X), dtype=np.float)
         if X_test is not None:
             self.pred = np.zeros(len(X_test), dtype=np.float)
-            x_test = X_test.copy()
+            
         self.imps = np.zeros((X.shape[1], K))
         self.scores = np.zeros((len(eval_metric), K))
 
@@ -173,6 +174,8 @@ class CrossValidator:
 
             x_train, x_valid = X[train_idx], X[valid_idx]
             y_train, y_valid = y[train_idx], y[valid_idx]
+            if X_test is not None:
+                x_test = X_test.copy()
 
             if transform is not None:
                 x_train, x_valid, y_train, y_valid, x_test = transform(
@@ -268,10 +271,11 @@ Feature selection
 class AdvFeatureSelection:
     '''
     Adversarial feature selection
-    USAGE:
-        adv = AdvFeatureSelection(LogisticRegression(), X, y)
-        adv.run(columns=X.columns, verbose=1)
-        adv.get_importance_features(index=False)
+    
+    # Usage
+    adv = AdvFeatureSelection(LogisticRegression(), X, y)
+    adv.run(columns=X.columns, verbose=1)
+    adv.get_importance_features(index=False)
     '''
 
     def __init__(self, model, X, y, eval_metric=roc_auc_score):

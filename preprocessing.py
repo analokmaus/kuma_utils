@@ -2,12 +2,12 @@ import os
 import sys
 import time
 import datetime
-import argparse
 import re
 from pathlib import Path
 from tqdm import tqdm
 from copy import deepcopy, copy
 import traceback
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -18,9 +18,8 @@ import seaborn as sns
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, PowerTransformer, QuantileTransformer
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
-from scipy.stats import ks_2samp
 
-import warnings
+from .common import KumaNumpy as kn
 
 
 '''
@@ -76,11 +75,12 @@ Categorical encoder
 class CatEncoder:
     '''
     Scikit-learn API like categorical feature encoder
-    USAGE:
-        target_encoder = CatEncoder('target', noise=0.1)
-        target_encoder.fit(x_train.feature , y_train)
-        x_train.feature = target_encoder.transform(x_train.feature)
-        x_test.feature = target_encoder.transform(x_test.feature)
+    
+    # Usage
+    target_encoder = CatEncoder('target', noise=0.1)
+    target_encoder.fit(x_train.feature , y_train)
+    x_train.feature = target_encoder.transform(x_train.feature)
+    x_test.feature = target_encoder.transform(x_test.feature)
     '''
 
     ENCODINGS = {'label', 'count', 'target'}
@@ -99,10 +99,10 @@ class CatEncoder:
         self.handle_unknown = handle_unknown
 
     def fit(self, X, y=None):
-        x = self._all2array(X.copy())
+        x = self._format_array(X.copy())
         if y is not None:
             assert len(X) == len(y)
-            y = self._all2array(y).copy()
+            y = self._format_array(y.copy())
 
         if self.encoding == 'label':
             self._label_encode(x, y)
@@ -114,11 +114,11 @@ class CatEncoder:
             raise ValueError(self.encoding)
 
     def transform(self, X):
-        x = self._all2array(X.copy())
+        x = self._format_array(X.copy())
         nan_idx = (x != x)
-        common_idx = np.isin(x, np.array(list(self.encode_dict.keys())))
+        common_idx = kn.isin(x, list(self.encode_dict.keys()))
 
-        x = self._replace(x, self.encode_dict)
+        x = kn.replace(x, self.encode_dict)
 
         # deal with unknown class
         if self.handle_missing == 'return_nan':
@@ -150,22 +150,17 @@ class CatEncoder:
         self.fit(X, y)
         return self.transform(X)
 
-    def _all2array(self, x):
-        assert isinstance(x, (np.ndarray, pd.DataFrame, pd.Series))
+    def _format_array(self, x):
+        x = kn.clean(kn.to_numpy(x))
 
-        if isinstance(x, pd.Series):
-            x = x.values
-        elif isinstance(x, pd.DataFrame):
-            x = x.values[:, 0]
-        else:
-            pass
-        
         if self.handle_missing == 'return_nan':
-            return x.astype(object).squeeze()
+            pass
         elif self.handle_missing == 'value':
-            return x.astype(str).squeeze()  # nan -> 'nan'
+            x = kn.fillna(x, 'nan')
         else:
             raise ValueError(self.handle_missing)
+        
+        return x
 
     def _sigmoid(self, x):
         '''Sigmoid like function (sigmoid when k=0 f=1)'''
@@ -179,15 +174,6 @@ class CatEncoder:
                 return x.astype(np.int)
             except:
                 return x.astype(np.float16)
-    
-    @staticmethod
-    def _dropna(x):
-        return x[x==x]
-
-    @staticmethod
-    def _replace(x, d):
-        return np.array(
-            [d[v] if v in d.keys() else v for v in x], dtype=object)
 
     @staticmethod
     def _add_noise(x, noise_level):
@@ -195,9 +181,9 @@ class CatEncoder:
     
     def _label_encode(self, x_train, y_train):
         self.encode_dict = {}
-        x_train = self._dropna(x_train)
+        x_train = kn.dropna(x_train)
 
-        for new, prev in enumerate(np.sort(np.unique(x_train))):
+        for new, prev in enumerate(kn.unique(x_train)):
             self.encode_dict[prev] = new
 
         if self.verbose:
@@ -205,9 +191,9 @@ class CatEncoder:
 
     def _count_encode(self, x_train, y_train):
         self.encode_dict = {}
-        x_train = self._dropna(x_train)
+        x_train = kn.dropna(x_train)
 
-        values, counts = np.unique(x_train, return_counts=True)
+        values, counts = kn.unique(x_train, return_counts=True)
         for prev, new  in zip(values, counts):
             self.encode_dict[prev] = new
 
@@ -216,11 +202,11 @@ class CatEncoder:
 
     def _target_encode(self, x_train, y_train):
         self.encode_dict = {}
-        x_train = self._dropna(x_train)
+        x_train = kn.dropna(x_train)
         y_train = y_train.astype(np.float16)
         mean_target_all = np.mean(y_train)
 
-        for val in np.unique(x_train):
+        for val in kn.unique(x_train):
             idx_class = x_train == val
             n_class = np.sum(idx_class)
             mean_target_class = np.mean(y_train[idx_class])
@@ -244,9 +230,10 @@ Distribution transformer
 class DistTransformer:
     '''
     Scikit-learn API like distribution transformer
-    USAGE:
-        scaler = DistTransformer(transform='rankgauss')
-        X[col] = scaler.fit_transform(X[col])
+
+    # Usage
+    scaler = DistTransformer(transform='rankgauss')
+    X[col] = scaler.fit_transform(X[col])
     '''
 
     TRANSFORMS = {
@@ -261,7 +248,7 @@ class DistTransformer:
         self.verbose = verbose
 
     def fit(self, X):
-        x = self._all2array(X).copy().reshape(-1, 1)
+        x = kn.to_numpy(X).copy().reshape(-1, 1)
 
         if self.t == 'standard':
             self.transformer = StandardScaler()
@@ -282,23 +269,12 @@ class DistTransformer:
         self.transformer.fit(x)
 
     def transform(self, X):
-        x = self._all2array(X).copy().reshape(-1, 1)
+        x = kn.to_numpy(X).copy().reshape(-1, 1)
         return self.transformer.transform(x)
     
     def fit_transform(self, X):
         self.fit(X)
         return self.transform(X)
-
-    @staticmethod
-    def _all2array(x):
-        assert isinstance(x, (np.ndarray, pd.DataFrame, pd.Series))
-
-        if isinstance(x, pd.Series):
-            return x.values
-        elif isinstance(x, pd.DataFrame):
-            return x.values[:, 0]
-        else:
-            return x
 
 
 '''
@@ -327,12 +303,7 @@ class MICE(IterativeImputer):
 
     @staticmethod
     def _add_nan_flag(X):
-        if isinstance(X, (pd.DataFrame)):
-            _X = X.values
-        elif isinstance(X, np.ndarray):
-            _X = X
-        else:
-            raise TypeError(type(X))
+        _X = kn.to_numpy(X)
         
         flags = np.zeros_like(_X, np.uint8)
         for c in range(_X.shape[1]):
