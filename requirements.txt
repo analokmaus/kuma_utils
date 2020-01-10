@@ -3,7 +3,7 @@ numpy==1.16.3
 pandas==0.24.0
 seaborn==0.9.0
 catboost==0.12.2
-tensorflow==1.12.0
+tensorflow==1.15.0
 torchsummary==1.5.1
 matplotlib_venn==0.11.5
 torch==1.3.1
