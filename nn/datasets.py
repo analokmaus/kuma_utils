@@ -10,19 +10,12 @@ from PIL import Image
 import torch
 import torch.utils.data as D
 
-
-def _all2array(x):
-        assert isinstance(x, (np.ndarray, pd.DataFrame, pd.Series))
-
-        if isinstance(x, (pd.Series, pd.DataFrame)):
-            return x.values
-        else:
-            return x
+from ..common import KumaNumpy as kn
 
 
 def category2embedding(df, categorical_features, dim='auto'):
-    df = _all2array(df)
-    cat_dims = [int(len(np.unique(df[:, col]))) for col in categorical_features]
+    df = kn.to_numpy(df)
+    cat_dims = [int(kn.nunique(df[:, col])) for col in categorical_features]
     if dim == 'auto':
         emb_dims = [(x, min(50, (x + 1) // 2)) for x in cat_dims]
     elif isinstance(dim, int):

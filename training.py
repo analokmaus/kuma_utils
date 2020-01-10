@@ -2,7 +2,6 @@ import os
 import sys
 import time
 import datetime
-import argparse
 import re
 from pathlib import Path
 from tqdm import tqdm
@@ -24,6 +23,8 @@ from lightgbm import LGBMRegressor, LGBMClassifier, Dataset
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge, Lasso
 from sklearn.metrics import roc_auc_score
+
+from .preprocessing import CatEncoder
 
 
 '''
@@ -262,6 +263,30 @@ class CrossValidator:
         
         self.basemodel, self.datasplit, self.models, \
             self.oof, self.pred, self.imps = objects
+
+
+class InfoldTargetEncoder:
+    '''
+    Target encoder w/o target leak
+    '''
+
+    def __init__(self, categorical_features, 
+                 encoder=CatEncoder(encoding='target')):
+        self.encoder = encoder
+        self.cat_idx = categorical_features
+
+    def __call__(self, Xs, ys, X_test=None):
+        assert len(Xs) == len(ys)
+
+        self.encoder.fit(Xs[0][:, self.cat_idx], ys[0])
+        for i in range(len(Xs)):
+            Xs[i][:, self.cat_idx] = self.encoder.transform(
+                Xs[i][:, self.cat_idx])
+        if X_test is not None:
+            X_test[:, self.cat_idx] = self.encoder.transform(
+                X_test[:, self.cat_idx])
+        
+        return (*Xs, *ys, X_test)
 
 
 '''

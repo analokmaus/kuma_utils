@@ -8,6 +8,7 @@ from tqdm import tqdm
 from copy import deepcopy, copy
 import traceback
 import warnings
+from copy import copy
 
 import numpy as np
 import pandas as pd
@@ -25,7 +26,6 @@ from .common import KumaNumpy as kn
 '''
 Misc.
 '''
-
 
 def reduce_mem_usage(df):
     """ 
@@ -72,16 +72,7 @@ def reduce_mem_usage(df):
 Categorical encoder
 '''
 
-class CatEncoder:
-    '''
-    Scikit-learn API like categorical feature encoder
-    
-    # Usage
-    target_encoder = CatEncoder('target', noise=0.1)
-    target_encoder.fit(x_train.feature , y_train)
-    x_train.feature = target_encoder.transform(x_train.feature)
-    x_test.feature = target_encoder.transform(x_test.feature)
-    '''
+class SingleCatEncoder:
 
     ENCODINGS = {'label', 'count', 'target'}
 
@@ -168,12 +159,9 @@ class CatEncoder:
 
     def _to_numeric(self, x):
         if self.encoding == 'target':
-            return x.astype(np.float16)
+            return kn.to_numeric(x, np.float16)
         else:
-            try:
-                return x.astype(np.int)
-            except:
-                return x.astype(np.float16)
+            return kn.to_numeric(x, [np.int, np.float16])
 
     @staticmethod
     def _add_noise(x, noise_level):
@@ -222,19 +210,56 @@ class CatEncoder:
         if self.verbose:
             print('target encoder: fitting completed.')
 
+    def copy(self):
+        return copy(self)
+
+
+class CatEncoder:
+    '''
+    Scikit-learn API like categorical feature encoder
+    
+    # Usage
+    target_encoder = CatEncoder('target', noise=0.1)
+    target_encoder.fit(x_train , y_train)
+    x_train = target_encoder.transform(x_train)
+    x_test = target_encoder.transform(x_test)
+    '''
+
+    def __init__(self, **kwargs):
+        self.base_enc = SingleCatEncoder(**kwargs)
+        self.col_encs = []
+
+    def fit(self, X, y=None):
+        _X = kn.to_numpy(X)
+        if len(_X.shape) == 1:
+            _X = _X.reshape(-1, 1)
+    
+        for col in range(_X.shape[1]):
+            col_enc = self.base_enc.copy()
+            col_enc.fit(_X[:, col], y)
+            self.col_encs.append(col_enc)
+        
+    def transform(self, X, y=None):
+        _X = kn.to_numpy(X)
+        if len(_X.shape) == 1:
+            _X = _X.reshape(-1, 1)
+        X_encoded = np.empty_like(_X, dtype=np.float16)
+
+        for col in range(_X.shape[1]):
+            X_encoded[:, col] = self.col_encs[col].transform(_X[:, col])
+
+        return X_encoded
+    
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X, y)
+
 
 '''
 Distribution transformer
 '''
 
-class DistTransformer:
-    '''
-    Scikit-learn API like distribution transformer
-
-    # Usage
-    scaler = DistTransformer(transform='rankgauss')
-    X[col] = scaler.fit_transform(X[col])
-    '''
+class SingleDistTransformer:
 
     TRANSFORMS = {
         'standard', 'min-max', 
@@ -276,6 +301,50 @@ class DistTransformer:
         self.fit(X)
         return self.transform(X)
 
+    def copy(self):
+        return copy(self)
+
+
+class DistTransformer:
+    '''
+    Scikit-learn API like distribution transformer
+
+    # Usage
+    scaler = DistTransformer(transform='rankgauss')
+    X = scaler.fit_transform(X)
+    '''
+
+    def __init__(self, **kwargs):
+        self.base_transform = SingleDistTransformer(**kwargs)
+        self.col_transforms = []
+
+    def fit(self, X):
+        _X = kn.to_numpy(X)
+        if len(_X.shape) == 1:
+            _X = _X.reshape(-1, 1)
+
+        for col in range(_X.shape[1]):
+            col_transform = self.base_transform.copy()
+            col_transform.fit(_X[:, col])
+            self.col_transforms.append(col_transform)
+
+    def transform(self, X):
+        _X = kn.to_numpy(X)
+        if len(_X.shape) == 1:
+            _X = _X.reshape(-1, 1)
+        X_transformed = np.empty_like(_X, dtype=np.float16)
+
+        for col in range(_X.shape[1]):
+            
+            X_transformed[:, col] = \
+                self.col_transforms[col].transform(_X[:, col]).reshape(-1)
+
+        return X_transformed
+
+    def fit_transform(self, X):
+        self.fit(X)
+        return self.transform(X)
+        
 
 '''
 Multivariate Imputation by Chained Equations (MICE) with NA flag

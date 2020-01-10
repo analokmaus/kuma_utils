@@ -23,7 +23,7 @@ except:
 import seaborn as sns
 from scipy.stats import ks_2samp
 
-from .preprocessing import CatEncoder
+from .preprocessing import SingleCatEncoder, CatEncoder
 from .common import KumaNumpy as kn
 
 
@@ -105,7 +105,7 @@ def explore_dataframe(train, test=None,
     assert isinstance(train, pd.DataFrame)
     if test is not None:
         assert isinstance(test, pd.DataFrame)
-    catenc = CatEncoder('label', handle_missing='return_nan', handle_unknown='value')
+    catenc = SingleCatEncoder('label', handle_missing='return_nan', handle_unknown='value')
 
     train_columns = set(train.columns)
     print(f'train shape:\t{train.shape}')

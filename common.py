@@ -7,6 +7,7 @@ from pathlib import Path
 from copy import deepcopy, copy
 import traceback
 import warnings
+from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
@@ -51,19 +52,32 @@ class KumaNumpy:
         if isinstance(x, pd.Series):
             return x.values
         elif isinstance(x, pd.DataFrame):
-            return x.values[:, 0]
+            return x.values
         elif isinstance(x, list):
             return np.array(x)
         else:
             return x
 
     @classmethod
-    def to_numeric(self, x, dtype=np.float):
-        try:
-            return x.astype(dtype)
-        except:
-            return x
+    def to_numeric(self, x, dtypes=[np.float], verbose=False):
+        if isinstance(dtypes, Iterable):
+            for dtype in dtypes:
+                try:
+                    return x.astype(dtype)
+                except:
+                    if verbose:
+                        print(f'failed to transform: {dtype}')
+                    pass
+        else:
+            try:
+                return x.astype(dtypes)
+            except:
+                if verbose:
+                    print(f'failed to transform: {dtypes}')
+                pass
 
+        return x
+        
     @classmethod
     def fillna(self, x, val):
         _x = x.copy()
