@@ -132,7 +132,7 @@ class SingleCatEncoder:
             x[unknown_idx] = np.nan
         else:
             raise ValueError(self.handle_unknown)
-
+        
         x = self._to_numeric(x)
         
         return self._add_noise(x, self.noise)
@@ -229,30 +229,40 @@ class CatEncoder:
         self.base_enc = SingleCatEncoder(**kwargs)
         self.col_encs = []
 
-    def fit(self, X, y=None):
+    def fit(self, X, y=None, verbose=False):
         _X = kn.to_numpy(X)
         if len(_X.shape) == 1:
             _X = _X.reshape(-1, 1)
+
+        if verbose:
+            iterator = tqdm(range(_X.shape[1]), desc='fitting columns..')
+        else:
+            iterator = range(_X.shape[1])
     
-        for col in range(_X.shape[1]):
+        for col in iterator:
             col_enc = self.base_enc.copy()
             col_enc.fit(_X[:, col], y)
             self.col_encs.append(col_enc)
         
-    def transform(self, X, y=None):
+    def transform(self, X, y=None, verbose=False):
         _X = kn.to_numpy(X)
         if len(_X.shape) == 1:
             _X = _X.reshape(-1, 1)
         X_encoded = np.empty_like(_X, dtype=np.float16)
 
-        for col in range(_X.shape[1]):
+        if verbose:
+            iterator = tqdm(range(_X.shape[1]), desc='transforming columns..')
+        else:
+            iterator = range(_X.shape[1])
+
+        for col in iterator:
             X_encoded[:, col] = self.col_encs[col].transform(_X[:, col])
 
         return X_encoded
     
-    def fit_transform(self, X, y=None):
-        self.fit(X, y)
-        return self.transform(X, y)
+    def fit_transform(self, X, y=None, verbose=False):
+        self.fit(X, y, verbose)
+        return self.transform(X, y, verbose)
 
 
 '''

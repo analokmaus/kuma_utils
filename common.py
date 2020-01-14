@@ -28,6 +28,9 @@ def clean_value(x):
 
     
 class KumaNumpy:
+    '''
+    Enhanced numpy operation
+    '''
 
     clean = np.vectorize(clean_value, otypes=[object])
 
@@ -62,13 +65,20 @@ class KumaNumpy:
     def to_numeric(self, x, dtypes=[np.float], verbose=False):
         if isinstance(dtypes, Iterable):
             for dtype in dtypes:
+                # np.integer cannot handle nan
+                if np.issubdtype(dtype, np.integer) and np.sum(x!=x) > 0:
+                    continue
+
                 try:
-                    return x.astype(dtype)
+                    return x.astype(dtypes)
                 except:
                     if verbose:
                         print(f'failed to transform: {dtype}')
                     pass
         else:
+            if np.issubdtype(dtype, np.integer) and np.sum(x != x) > 0:
+                return x
+                
             try:
                 return x.astype(dtypes)
             except:
@@ -94,4 +104,8 @@ class KumaNumpy:
 
     @classmethod
     def replace(self, x, d):
-        return pd.Series(x).replace(d).values
+        return pd.Series(x).map(d).values
+
+    @classmethod
+    def mode(self, x, **kwargs):
+        return pd.Series(x).mode(**kwargs).values[0]
