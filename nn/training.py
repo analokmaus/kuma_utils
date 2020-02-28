@@ -4,11 +4,14 @@ import time
 from pathlib import Path
 from tqdm import tqdm
 from collections import defaultdict
+from copy import copy, deepcopy
 
 import numpy as np
 import pandas as pd
 
 import torch
+import torch.utils.data as D
+from .datasets import *
 from .snapshot import *
 from .logger import *
 
@@ -392,3 +395,92 @@ class NeuralTrainer:
             print(summary(self.model, input_shape))
         except:
             print('')
+
+
+'''
+Cross Validation for Tabular data
+'''
+
+class NeuralCV:
+
+    def __init__(self, trainer, datasplit):
+        self.trainer = trainer
+        self.datasplit = datasplit
+        self.models = []
+        self.oof = None
+        self.pred = None
+        self.imps = None
+
+    def run(self, X, y, X_test=None,
+            group=None, n_splits=None,
+            eval_metric=None, batch_size=None, 
+            transform=None, train_params={}, verbose=True):
+        
+        if not isinstance(eval_metric, (list, tuple, set)):
+            eval_metric = [eval_metric]
+        
+        if n_splits is None:
+            K = self.datasplit.get_n_splits()
+        else:
+            K = n_splits
+
+        self.oof = np.zeros(len(X), dtype=np.float)
+
+        if X_test is not None:
+            self.pred = np.zeros(len(X_test), dtype=np.float)
+
+        self.imps = np.zeros((X.shape[1], K))
+        self.scores = np.zeros((len(eval_metric), K))
+
+        if batch_size is None:
+            batch_size = 256
+
+        for fold_i, (train_idx, valid_idx) in enumerate(
+            self.datasplit.split(X, y, group)):
+
+            x_train, x_valid = X[train_idx], X[valid_idx]
+            y_train, y_valid = y[train_idx], y[valid_idx]
+            if X_test is not None:
+                x_test = X_test.copy()
+
+            if transform is not None:
+                x_train, x_valid, y_train, y_valid, x_test = transform(
+                    Xs=(x_train, x_valid), ys=(y_train, y_valid),
+                    X_test=x_test)
+
+            ds_train = numpy2dataset(x_train, y_train)
+            ds_valid = numpy2dataset(x_valid, y_valid)
+            ds_test = numpy2dataset(x_test, np.arange(len(x_test)))
+
+            loader_train = D.DataLoader(ds_train, batch_size=batch_size, shuffle=True)
+            loader_valid = D.DataLoader(ds_valid, batch_size=batch_size, shuffle=False)
+            loader_test = D.DataLoader(ds_test, batch_size=batch_size, shuffle=False)
+
+            nt = deepcopy(self.trainer)
+            nt.train(loader=loader_train, 
+                     loader_valid=loader_valid, 
+                     loader_test=loader_test,
+                     **deepcopy(train_params))
+
+            self.oof[valid_idx] = nt.oof.squeeze()
+            if X_test is not None:
+                self.pred += nt.pred.squeeze() / K
+
+            for i, _metric in enumerate(eval_metric):
+                score = _metric(y_valid, self.oof[valid_idx])
+                self.scores[i, fold_i] = score
+
+            if verbose >= 0:
+                log_str = f'[CV] Fold {fold_i}:'
+                log_str += ''.join(
+                    [f' m{i}={self.scores[i, fold_i]:.5f}' for i in range(len(eval_metric))])
+                print(log_str)
+        
+        log_str = f'[CV] Overall:'
+        log_str += ''.join(
+            [f' m{i}={me:.5f}±{se:.5f}' for i, (me, se) in enumerate(zip(
+                np.mean(self.scores, axis=1),
+                np.std(self.scores, axis=1)/np.sqrt(len(eval_metric))
+            ))]
+        )
+        print(log_str)

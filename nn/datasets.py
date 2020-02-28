@@ -23,3 +23,9 @@ def category2embedding(df, categorical_features, dim='auto'):
     else:
         raise ValueError(dim)
     return emb_dims
+
+
+def numpy2dataset(X, y):
+    return D.TensorDataset(
+        torch.tensor(X.astype(np.float32)), 
+        torch.tensor(y.astype(np.float32).reshape(-1, 1)))
