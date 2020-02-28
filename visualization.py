@@ -164,6 +164,7 @@ def explore_dataframe(train, test=None,
 
     if save_plot is not None:
         plt.savefig(save_plot)
+        plt.close()
 
 
 def plot_correlation(df):

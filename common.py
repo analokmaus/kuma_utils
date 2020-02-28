@@ -76,7 +76,7 @@ class KumaNumpy:
                         print(f'failed to transform: {dtype}')
                     pass
         else:
-            if np.issubdtype(dtype, np.integer) and np.sum(x != x) > 0:
+            if np.issubdtype(dtypes, np.integer) and np.sum(x != x) > 0:
                 return x
                 
             try:

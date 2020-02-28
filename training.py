@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 import matplotlib.pyplot as plt
+import matplotlib.cm as colormap
 import seaborn as sns
 
 from catboost import CatBoostRegressor, CatBoostClassifier, Pool
@@ -24,6 +25,11 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge, Lasso
 from sklearn.metrics import roc_auc_score
 
+try:
+    import category_encoders as ce
+    EXT_CE = True
+except:
+    EXT_CE = False
 from .preprocessing import CatEncoder
 
 
@@ -116,7 +122,8 @@ class Trainer:
         plt.figure(figsize=(5, int(len(columns) / 3)))
         imps = self.get_feature_importances()
         order = np.argsort(imps)
-        plt.barh(np.array(columns)[order], imps[order])
+        colors = colormap.winter(np.arange(len(columns))/len(columns))
+        plt.barh(np.array(columns)[order], imps[order], color=colors)
         plt.show()
         
 
@@ -236,8 +243,9 @@ class CrossValidator:
         imps_mean = np.mean(self.imps, axis=1)
         imps_se = np.std(self.imps, axis=1) / np.sqrt(self.imps.shape[0])
         order = np.argsort(imps_mean)
+        colors = colormap.winter(np.arange(len(columns))/len(columns))
         plt.barh(np.array(columns)[order],
-                imps_mean[order], xerr=imps_se[order])
+                imps_mean[order], xerr=imps_se[order], color=colors)
         plt.show()
 
     def save_feature_importances(self, columns, path):
@@ -245,8 +253,9 @@ class CrossValidator:
         imps_mean = np.mean(self.imps, axis=1)
         imps_se = np.std(self.imps, axis=1) / np.sqrt(self.imps.shape[0])
         order = np.argsort(imps_mean)
+        colors = colormap.winter(np.arange(len(columns))/len(columns))
         plt.barh(np.array(columns)[order],
-                 imps_mean[order], xerr=imps_se[order])
+                 imps_mean[order], xerr=imps_se[order], color=colors)
         plt.savefig(path)
 
     def save(self, path):
@@ -270,14 +279,20 @@ class InfoldTargetEncoder:
     Target encoder w/o target leak
     '''
 
-    def __init__(self, categorical_features, 
-                 encoder=CatEncoder(encoding='target')):
-        self.encoder = encoder
+    def __init__(self, categorical_features, encoder=None):
+        if encoder is None:
+            if EXT_CE:
+                self.encoder = ce.TargetEncoder(cols=np.arange(len(categorical_features)), 
+                                                return_df=False)
+            else:
+                self.encoder = CatEncoder(encoding='target')
+        else:
+            self.encoder = encoder
         self.cat_idx = categorical_features
 
     def __call__(self, Xs, ys, X_test=None):
         assert len(Xs) == len(ys)
-
+            
         self.encoder.fit(Xs[0][:, self.cat_idx], ys[0])
         for i in range(len(Xs)):
             Xs[i][:, self.cat_idx] = self.encoder.transform(
