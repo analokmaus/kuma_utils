@@ -238,7 +238,9 @@ class CrossValidator:
         )
         print(log_str)
         
-    def plot_feature_importances(self, columns):
+    def plot_feature_importances(self, columns=None):
+        if columns is None:
+            columns = [f'feature_{i}' for i in range(len(self.imps))]
         plt.figure(figsize=(5, int(len(columns) / 3)))
         imps_mean = np.mean(self.imps, axis=1)
         imps_se = np.std(self.imps, axis=1) / np.sqrt(self.imps.shape[0])
@@ -248,7 +250,9 @@ class CrossValidator:
                 imps_mean[order], xerr=imps_se[order], color=colors)
         plt.show()
 
-    def save_feature_importances(self, columns, path):
+    def save_feature_importances(self, path, columns=None):
+        if columns is None:
+            columns = [f'feature_{i}' for i in range(len(self.imps))]
         plt.figure(figsize=(5, int(len(columns) / 3)))
         imps_mean = np.mean(self.imps, axis=1)
         imps_se = np.std(self.imps, axis=1) / np.sqrt(self.imps.shape[0])
