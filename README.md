@@ -54,5 +54,6 @@
         
     ┣ training.py
         ┣ NeuralTrainer         - シュッとNNを訓練する奴
+        ┣ NeuralCV              - シュッとテーブルデータのNNをCVする奴
         ┣ EarlyStopping         - 文字通り
 ```

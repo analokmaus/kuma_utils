@@ -149,7 +149,7 @@ Trainer
 class NeuralTrainer:
     '''
     Trainer for pytorch models
-    
+
     # How to specify verbosity
     ## verbose
     0(False)    : Hide log
@@ -415,6 +415,7 @@ Cross Validation for Tabular data
 '''
 
 class NeuralCV:
+    IGNORE_PARAMS = ['snapshot_path']
 
     def __init__(self, trainer, datasplit):
         self.trainer = trainer
@@ -427,11 +428,17 @@ class NeuralCV:
     def run(self, X, y, X_test=None,
             group=None, n_splits=None,
             eval_metric=None, batch_size=None, 
+            snapshot_path=None, 
             transform=None, train_params={}, verbose=True):
         
         if not isinstance(eval_metric, (list, tuple, set)):
             eval_metric = [eval_metric]
-        
+        if snapshot_path is None:
+            snapshot_path = Path().cwd()
+        if not isinstance(snapshot_path, Path):
+            snapshot_path = Path(snapshot_path)
+        assert snapshot_path.is_dir()
+            
         if n_splits is None:
             K = self.datasplit.get_n_splits()
         else:
@@ -447,6 +454,11 @@ class NeuralCV:
 
         if batch_size is None:
             batch_size = 256
+
+        for key in self.IGNORE_PARAMS:
+            if key in train_params.keys():
+                train_params.pop(key)
+                print(f'[CV] "{key}" in train_params will be ignored.')
 
         for fold_i, (train_idx, valid_idx) in enumerate(
             self.datasplit.split(X, y, group)):
@@ -471,9 +483,11 @@ class NeuralCV:
 
             nt = deepcopy(self.trainer)
             _train_params = deepcopy(train_params)
+            this_snapshot_path = snapshot_path / f'snapshot_fold_{fold_i}.pt'
             nt.train(loader=loader_train, 
                      loader_valid=loader_valid, 
-                     loader_test=loader_test,
+                     loader_test=loader_test, 
+                     snapshot_path=this_snapshot_path, 
                      **_train_params)
 
             self.oof[valid_idx] = nt.oof.squeeze()
