@@ -84,6 +84,7 @@ class EarlyStopping:
     def __init__(self, patience=5, maximize=False):
         self.patience = patience
         self.counter = 0
+        self.log = []
         self.best_score = None
         self.early_stop = False
         self.val_loss_min = np.Inf
@@ -95,6 +96,7 @@ class EarlyStopping:
 
     def __call__(self, val_loss):
         score = self.coef * val_loss
+        self.log.append(score)
         if self.best_score is None:
             self.best_score = score
             return True
@@ -147,6 +149,16 @@ Trainer
 class NeuralTrainer:
     '''
     Trainer for pytorch models
+    
+    # How to specify verbosity
+    ## verbose
+    0(False)    : Hide log
+    1(True)     : Validation dataset metrics
+    XY(>=0)
+        X <= 1  : No addition
+        X >= 2  : Add timestamp
+        Y <= 1  : No addition
+        Y >= 2  : Add training dataset metrics
     '''
 
     def __init__(self, model, optimizer, scheduler, device=None, tta=1):
@@ -167,9 +179,9 @@ class NeuralTrainer:
               logger=None, event=None, stopper=None,
               resume=False,
               grad_accumulations=1, eval_interval=1, 
-              log_interval=10, name='', 
+              log_interval=10, log_verbosity=1, 
               predict_oof=True, predict_pred=True,
-              verbose=True):
+              name='', verbose=True):
 
         if logger is None:
             logger = DummyLogger('')
@@ -218,10 +230,11 @@ class NeuralTrainer:
             '''
             Train
             '''
-            train_losses = []
-            train_scores = []
-            self.model.train()
+            loss_train = 0.0
+            score_train = 0.0
+            total_batch = len(loader.dataset) / loader.batch_size
 
+            self.model.train()
             for batch_i, (X, y) in enumerate(loader):
                 batches_done = len(loader) * epoch + batch_i
 
@@ -243,41 +256,40 @@ class NeuralTrainer:
                 if batch_i % log_interval == 0:
                     score = eval_metric(_y, y)
                     for param_group in self.optimizer.param_groups:
-                        learing_rate = param_group['lr']
+                        learning_rate = param_group['lr']
                     evaluation_metrics = [
                         (f'score_{name}', score),
                         (f'loss_{name}', loss.item()),
-                        (f'lr_{name}', learing_rate)
+                        (f'lr_{name}', learning_rate)
                     ]
                     logger.list_of_scalars_summary(evaluation_metrics, batches_done)
 
-                    train_scores.append(score)
-                    train_losses.append(loss.item())
+                batch_weight = len(X) / loader.batch_size
+                loss_train += loss.item() / total_batch * batch_weight
+                score_train += score / total_batch * batch_weight
 
-            avg_loss_train = np.average(train_losses)
-            avg_score_train = np.average(train_scores)
-            self.log['train']['loss'].append(avg_loss_train)
-            self.log['train']['score'].append(avg_score_train)
+            self.log['train']['loss'].append(loss_train)
+            self.log['train']['score'].append(score_train)
 
             current_time = time.strftime(
-                '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 3 else ''
+                '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 20 else ''
             log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch+num_epochs}] Trn '
-            log_str += f"loss={avg_loss_train:.6f} score={avg_score_train:.6f}"
+            log_str += f"loss={loss_train:.6f} score={score_train:.6f}"
 
             '''
             No validation set
             '''
             if loader_valid is None:
-                early_stopping_target = avg_score_train
+                early_stopping_target = score_train
 
-                if stopper(early_stopping_target): # score updated
+                if stopper(early_stopping_target): # score improved
                     save_snapshots(epoch, 
                         self.model, self.optimizer, self.scheduler, snapshot_path)
                     log_str += f' best={stopper.score():.6f}'
                 else:
                     log_str += f' best={stopper.score():.6f}*({stopper.state()[0]})'
 
-                if verbose >= 2:
+                if verbose and epoch % log_verbosity == 0:
                     print(log_str)
 
                 if stopper.stop():
@@ -296,12 +308,14 @@ class NeuralTrainer:
             '''
             Validation
             '''
-            if verbose >= 2:  # Show log of training
+            if verbose and int(str(verbose)[-1]) >= 2 and epoch % log_verbosity == 0:  
+                # Show log of training set
                 print(log_str)
 
             if epoch % eval_interval == 0:
-                valid_losses = []
-                valid_scores = []
+                loss_valid = 0.0
+                score_valid = 0.0
+                total_batch = len(loader_valid.dataset) / loader_valid.batch_size
                 self.model.eval()
                 with torch.no_grad():
                      for X, y in loader_valid:
@@ -311,33 +325,32 @@ class NeuralTrainer:
                         loss = criterion(_y, y)
                         score = eval_metric(_y, y)
 
-                        valid_scores.append(score)
-                        valid_losses.append(loss.item())
+                        batch_weight = len(X) / loader_valid.batch_size
+                        loss_valid += loss.item() / total_batch * batch_weight
+                        score_valid += score / total_batch * batch_weight
 
-                avg_loss_valid = np.average(valid_losses)
-                avg_score_valid = np.average(valid_scores)
-                self.log['valid']['loss'].append(avg_loss_valid)
-                self.log['valid']['score'].append(avg_score_valid)
+                self.log['valid']['loss'].append(loss_valid)
+                self.log['valid']['score'].append(score_valid)
                 
                 current_time = time.strftime(
-                    '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 3 else ''
+                    '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 20 else ''
                 log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch+num_epochs}] Val '
-                log_str += f"loss={avg_loss_valid:.6f} score={avg_score_valid:.6f}"
+                log_str += f"loss={loss_valid:.6f} score={score_valid:.6f}"
                 evaluation_metrics = [
-                    (f"val_accuracy_{name}", avg_score_valid),
-                    (f"valid_loss_{name}", avg_loss_valid)
+                    (f"score_valid({name})", score_valid),
+                    (f"loss_valid({name})", loss_valid)
                 ]
                 logger.list_of_scalars_summary(evaluation_metrics, epoch)
 
-                early_stopping_target = avg_score_valid
+                early_stopping_target = score_valid
                 if stopper(early_stopping_target):  # score updated
                     save_snapshots(
                         epoch, self.model, self.optimizer, self.scheduler, snapshot_path)
-                    f' best={stopper.score():.6f}'
+                    log_str += f' best={stopper.score():.6f}'
                 else:
                     log_str += f' best={stopper.score():.6f}*({stopper.state()[0]})'
 
-                if verbose:
+                if verbose and epoch % log_verbosity == 0:
                     print(log_str)
 
             if stopper.stop():
@@ -457,10 +470,11 @@ class NeuralCV:
             loader_test = D.DataLoader(ds_test, batch_size=batch_size, shuffle=False)
 
             nt = deepcopy(self.trainer)
+            _train_params = deepcopy(train_params)
             nt.train(loader=loader_train, 
                      loader_valid=loader_valid, 
                      loader_test=loader_test,
-                     **deepcopy(train_params))
+                     **_train_params)
 
             self.oof[valid_idx] = nt.oof.squeeze()
             if X_test is not None:
