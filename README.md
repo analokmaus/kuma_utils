@@ -29,7 +29,8 @@
     ┣ Trainer           - いろいろなモデルを学習しやすくするためのラッパー
     ┣ CrossValidator    - CVをシュッと行い、結果のセーブやロードも可能
     ┣ InfoldTargetEncoder   - fold内でtarget encodingを行う
-    ┣ AdvFeatureSelection   - Adversarial validationを使った特徴量選択
+    ┣ AdversarialValidationInspector    - Adversarial validationを使った特徴量選択
+    ┣ NullImportanceInspector           - Null importanceを使った特徴量選択
     ┣ StratifiedGroupKFold  - 層別化したGroupKFold
 
 ┣ metrics.py

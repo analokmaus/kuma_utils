@@ -67,7 +67,10 @@ class Trainer:
 
         if self.model_type[:8] == 'CatBoost':
             train_data = Pool(data=X, label=y, cat_features=cat_features)
-            valid_data = Pool(data=X_valid, label=y_valid, cat_features=cat_features)
+            if X_valid is not None:
+                valid_data = Pool(data=X_valid, label=y_valid, cat_features=cat_features)
+            else:
+                valid_data = Pool(data=X, label=y, cat_features=cat_features)
             self.model.fit(X=train_data, eval_set=valid_data, **fit_params)
             self.best_iteration = self.model.get_best_iteration()
 
@@ -76,8 +79,12 @@ class Trainer:
                 cat_features = []
             # train_data = Dataset(data=X, label=y, categorical_feature=cat_features)
             # valid_data = Dataset(data=X_valid, label=y_valid, categorical_feature=cat_features)
-            self.model.fit(X, y, eval_set=[(X, y), (X_valid, y_valid)], 
-                           categorical_feature=cat_features, **fit_params)
+            if X_valid is not None:
+                self.model.fit(X, y, eval_set=[(X, y), (X_valid, y_valid)], 
+                            categorical_feature=cat_features, **fit_params)
+            else:
+                self.model.fit(X, y, eval_set=[(X, y)],
+                               categorical_feature=cat_features, **fit_params)
             self.best_iteration = self.model.best_iteration_
 
         else:
@@ -118,9 +125,12 @@ class Trainer:
     def predict_proba(self, X):
         return self.model.predict_proba(X)
 
-    def plot_feature_importances(self, columns):
-        plt.figure(figsize=(5, int(len(columns) / 3)))
+    def plot_feature_importances(self, columns=None):
         imps = self.get_feature_importances()
+        if columns is None:
+            columns = [f'feature_{i}' for i in range(len(imps))]
+
+        plt.figure(figsize=(5, int(len(columns) / 3)))
         order = np.argsort(imps)
         colors = colormap.winter(np.arange(len(columns))/len(columns))
         plt.barh(np.array(columns)[order], imps[order], color=colors)
@@ -312,61 +322,106 @@ class InfoldTargetEncoder:
 Feature selection
 '''
 
-class AdvFeatureSelection:
+class AdversarialValidationInspector:
     '''
-    Adversarial feature selection
-    
-    # Usage
-    adv = AdvFeatureSelection(LogisticRegression(), X, y)
-    adv.run(columns=X.columns, verbose=1)
-    adv.get_importance_features(index=False)
+    Feature selection by adversarial validation
     '''
-
     def __init__(self, model, X, y, eval_metric=roc_auc_score):
-        self.X = X
-        self.y = y
-
-        self.model = Trainer(model)
-        self.model.train(self.X, self.y)
-        self.eval_metric = eval_metric
-        self.basescore = self.eval_metric(self.y, self.model.predict_proba(self.X)[:, 1])
-
-    def run(self, target=None, columns=None, verbose=False):
-        if columns is None:
-            columns = np.arange(self.X.shape[1])
+        if isinstance(model, Trainer):
+            self.trainer = deepcopy(model)
         else:
-            if not isinstance(columns, np.ndarray):
-                columns = np.array(columns)
-            assert len(columns) == self.X.shape[1]
+            assert model
         
-        if target is None:
-            target = columns
+        self.X = X
+        self.y = y.copy()
+
+    def run(self, train_params, verbose=False):
+        # Get adversarial score
+        self.trainer.train(self.X, self.y, **train_params)
+        self.adv_scores = self.trainer.get_feature_importances()
+
+    def show(self, columns=None):
+        if columns is None:
+            columns = [f'feature_{i}' for i in range(self.X.shape[1])]
+
+        plt.figure(figsize=(5, int(len(columns) / 3)))
+        order = np.argsort(self.adv_scores)
+        colors = colormap.winter(np.arange(len(columns))/len(columns))
+        plt.barh(np.array(columns)[order],
+                 self.adv_scores[order], color=colors)
+        plt.show()
+
+    def best(self, n=5, columns=None):
+        order = np.argsort(self.adv_scores)[::-1]
+        if columns is None:  # return index
+            return np.arange(len(self.adv_scores))[order[:n]]
         else:
-            if not isinstance(target, np.ndarray):
-                target = np.array(target)
-            assert len(target) <= len(columns)
+            return np.array(columns)[order[:n]]
 
-        self.columns = columns
-        target = np.where(np.isin(columns, target))[0]
-
-        improvements = []
-        for icol in target:
-            _X = np.delete(self.X, icol, axis=1)
-            self.model.train(_X, self.y)
-            score = self.eval_metric(self.y, self.model.predict_proba(_X)[:, 1])
-            delta = self.basescore - score
-            improvements.append(delta)
-            good = '*' if delta > 0 else ' '
-            if verbose:
-                print(f'{good} {icol}_{columns[icol]}: {delta:.5f}')
-
-        self.improvements = improvements
-
-    def get_importance_features(self, n=5, index=False):
-        if index:
-            return np.argsort(self.improvements)[::-1][:n]
+    def worst(self, n=5, columns=None):
+        order = np.argsort(self.adv_scores)
+        if columns is None:  # return index
+            return np.arange(len(self.adv_scores))[order[:n]]
         else:
-            return self.columns[np.argsort(self.improvements)[::-1][:n]]
+            return np.array(columns)[order[:n]]
+
+
+class NullImportanceInspector:
+    '''
+    Feature selection by null importance
+    '''
+    def __init__(self, model, X, y):
+        if isinstance(model, Trainer):
+            self.trainer = deepcopy(model)
+        else:
+            assert model
+        self.X = X
+        self.y = y.copy()
+
+    def run(self, train_params, iteration=10, verbose=False):
+        if verbose:
+            _iter = tqdm(range(iteration), desc='Calculating null importance')
+        else:
+            _iter = range(iteration)
+        self.null_imps = np.empty((iteration, self.X.shape[1]), dtype=np.float16)
+        
+        # Get actual feature importance
+        self.trainer.train(self.X, self.y, **train_params)
+        self.actual_imps = self.trainer.get_feature_importances()
+        
+        # Get null feature importance
+        for i in _iter:
+            _y = np.random.permutation(self.y)
+            self.trainer.train(self.X, _y, **train_params)
+            self.null_imps[i] = self.trainer.get_feature_importances()
+
+        # Calculation feature score
+        null_imps75 = np.percentile(self.null_imps, 75, axis=0)
+        self.imp_scores =  np.log(1e-10 + self.actual_imps / (1 + null_imps75))
+        
+    def show(self, columns=None):
+        if columns is None:
+            columns = [f'feature_{i}' for i in range(self.X.shape[1])]
+
+        plt.figure(figsize=(5, int(len(columns) / 3)))
+        order = np.argsort(self.imp_scores)
+        colors = colormap.winter(np.arange(len(columns))/len(columns))
+        plt.barh(np.array(columns)[order], self.imp_scores[order], color=colors)
+        plt.show()
+
+    def best(self, n=5, columns=None):
+        order = np.argsort(self.imp_scores)[::-1]
+        if columns is None: # return index
+            return np.arange(len(self.imp_scores))[order[:n]]
+        else:
+            return np.array(columns)[order[:n]]
+
+    def worst(self, n=5, columns=None):
+        order = np.argsort(self.imp_scores)
+        if columns is None:  # return index
+            return np.arange(len(self.imp_scores))[order[:n]]
+        else:
+            return np.array(columns)[order[:n]]
 
 
 '''
