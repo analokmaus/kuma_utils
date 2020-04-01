@@ -11,6 +11,7 @@ import pickle
 import random
 from collections import Counter, defaultdict
 import warnings
+import gc
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,7 @@ try:
 except:
     EXT_CE = False
 from .preprocessing import CatEncoder
+from .metrics import RMSE
 
 
 '''
@@ -61,9 +63,13 @@ class Trainer:
 
         self.model = model
         self.model_type = model_type
+        self.is_trained = False
+        self.null_importances = None
+        self.permutation_importances = None
     
     def train(self, X, y, X_valid=None, y_valid=None,
-              cat_features=None, eval_metric=None, fit_params={}):
+              cat_features=None, fit_params={}):
+        self.input_shape = X.shape
 
         if self.model_type[:8] == 'CatBoost':
             train_data = Pool(data=X, label=y, cat_features=cat_features)
@@ -77,8 +83,6 @@ class Trainer:
         elif self.model_type[:4] == 'LGBM':
             if cat_features is None:
                 cat_features = []
-            # train_data = Dataset(data=X, label=y, categorical_feature=cat_features)
-            # valid_data = Dataset(data=X_valid, label=y_valid, categorical_feature=cat_features)
             if X_valid is not None:
                 self.model.fit(X, y, eval_set=[(X, y), (X_valid, y_valid)], 
                             categorical_feature=cat_features, **fit_params)
@@ -89,7 +93,9 @@ class Trainer:
 
         else:
             self.model.fit(X, y, **fit_params)
-            self.best_iteration = -1
+            self.best_iteration = 0
+
+        self.is_trained = True
 
     def get_model(self):
         return self.model
@@ -97,36 +103,148 @@ class Trainer:
     def get_best_iteration(self):
         return self.best_iteration
 
-    def get_feature_importances(self):
-        if self.model_type in ['CatBoostRegressor', 'CatBoostClassifier',
-                               'LGBMRegressor', 'LGBMClassifier',
-                               'RandomForestRegressor', 'RandomForestClassifier']:
-            return self.model.feature_importances_
-        elif self.model_type in ['LinearRegression', 'LogisticRegression',
-                                 'Ridge', 'Lasso']:
-            return self.model.coef_
-        elif self.model_type in ['SVR', 'SVC']:
-            if self.model.get_params()['kernel'] == 'linear':
-                return self.model.coef_
-            else:
-                return 0
-        else:
-            return 0
-    
-    def get_params(self):
-        if self.model_type[:8] == 'CatBoost':
-            print(model.get_params())
-        else:
-            print('')
-
     def predict(self, X):
         return self.model.predict(X)
 
     def predict_proba(self, X):
         return self.model.predict_proba(X)
 
-    def plot_feature_importances(self, columns=None):
-        imps = self.get_feature_importances()
+    def get_feature_importances(self, method='fast', importance_params={}):
+        '''
+        # 
+        '''
+        if method == 'auto':
+            if self.model_type in ['CatBoostRegressor', 'CatBoostClassifier',
+                                   'LGBMRegressor', 'LGBMClassifier',
+                                   'RandomForestRegressor', 'RandomForestClassifier']:
+                return self.model.feature_importances_
+            else:
+                if self.permutation_importances is None:
+                    return self.get_permutation_importances(**importance_params)
+                else:
+                    return self.permutation_importances
+        elif method == 'fast':
+            if self.model_type in ['CatBoostRegressor', 'CatBoostClassifier',
+                                   'LGBMRegressor', 'LGBMClassifier',
+                                   'RandomForestRegressor', 'RandomForestClassifier']:
+                return self.model.feature_importances_
+            else: # Gomennasai
+                return np.zeros(self.input_shape[1])
+        elif method == 'permutation':
+            if self.permutation_importances is None:
+                return self.get_permutation_importances(**importance_params)
+            else:
+                return self.permutation_importances
+        elif method == 'null':
+            if self.null_importances is None:
+                return self.get_null_importances(**importance_params)
+            else:
+                return self.null_importances
+        else:
+            raise ValueError(method)
+
+    def get_coef(self):
+        if self.model_type in ['LinearRegression', 'LogisticRegression',
+                               'Ridge', 'Lasso']:
+            return self.model.coef_
+        elif self.model_type in ['SVR', 'SVC'] and self.model.get_params()['kernel'] == 'linear':
+            return self.model.coef_
+        else:
+            return np.zeros(self.input_shape[1])
+
+    def get_null_importances(self, X, y, X_valid=None, y_valid=None,
+                            cat_features=None, fit_params={}, prediction='predict',
+                            eval_metric=None, iteration=10, verbose=False):
+        assert self.model_type in ['CatBoostRegressor', 'CatBoostClassifier',
+                                   'LGBMRegressor', 'LGBMClassifier',
+                                   'RandomForestRegressor', 'RandomForestClassifier']
+        assert self.is_trained
+
+        if verbose:
+            _iter = tqdm(range(iteration), desc='Calculating null importance')
+        else:
+            _iter = range(iteration)
+
+        # Get actual importances
+        actual_imps = self.model.feature_importances_
+        null_imps = np.empty(
+            (iteration, self.input_shape[1]), dtype=np.float16)
+
+        # Get null importances
+        for i in _iter:
+            y_shuffled = np.random.permutation(y)
+            self.train(X, y_shuffled, X_valid, y_valid,
+                       cat_features, fit_params)
+            null_imps[i] = self.model.feature_importances_
+
+        # Calculation feature score
+        null_imps75 = np.percentile(null_imps, 75, axis=0)
+        null_importances = np.log(1e-10 + actual_imps / (1 + null_imps75))
+        self.null_importances = null_importances
+        return null_importances
+
+    def get_permutation_importances(self, X, y, X_valid=None, y_valid=None,
+                                   cat_features=None, fit_params={}, pred_method='predict', 
+                                   eval_metric=RMSE(), iteration=None, verbose=False):
+        assert self.is_trained
+
+        if verbose:
+            _iter = tqdm(
+                range(self.input_shape[1]), desc='Calculating permutation importance')
+        else:
+            _iter = range(self.input_shape[1])
+
+        # Get baseline score
+        if X_valid is None:
+            if pred_method == 'predict':
+                pred = self.predict(X)
+            elif pred_method == 'binary_proba':
+                pred = self.binary_proba(X)
+            else:
+                pred = self.predict(X)
+            baseline_score = eval_metric(y, pred)
+        else:
+            if pred_method == 'predict':
+                pred = self.predict(X_valid)
+            elif pred_method == 'binary_proba':
+                pred = self.binary_proba(X_valid)
+            else:
+                pred = self.predict(X_valid)
+            baseline_score = eval_metric(y_valid, pred)
+        permutation_scores = np.empty(self.input_shape[1])
+
+        # Get permutation importances
+        for icol in _iter:
+            X_shuffled = copy(X)
+            X_shuffled[:, icol] = np.random.permutation(X_shuffled[:, icol])
+            self.train(X_shuffled, y, X_valid, y_valid,
+                       cat_features, fit_params)
+            if X_valid is None:
+                if pred_method == 'predict':
+                    pred = self.predict(X)
+                elif pred_method == 'binary_proba':
+                    pred = self.binary_proba(X)
+                else:
+                    pred = self.predict(X)
+                permutation_scores[icol] = eval_metric(y, pred)
+            else:
+                if pred_method == 'predict':
+                    pred = self.predict(X_valid)
+                elif pred_method == 'binary_proba':
+                    pred = self.binary_proba(X_valid)
+                else:
+                    pred = self.predict(X_valid)
+                permutation_scores[icol] = eval_metric(y_valid, pred)
+            del X_shuffled, pred; gc.collect()
+
+        # Calculation feature score
+        permutation_importances = permutation_scores - baseline_score
+        self.permutation_importances = permutation_importances
+        return permutation_importances
+
+    def plot_feature_importances(self, columns=None, method='fast'):
+        imps = self.get_feature_importances(method, verbose=True)
+
         if columns is None:
             columns = [f'feature_{i}' for i in range(len(imps))]
 
@@ -151,7 +269,6 @@ class CrossValidator:
         verbose=0
     )
     '''
-
     def __init__(self, model, datasplit):
         self.basemodel = copy(model)
         self.datasplit = datasplit
@@ -171,7 +288,8 @@ class CrossValidator:
     def run(self, X, y, X_test=None, 
             group=None, n_splits=None, 
             eval_metric=None, prediction='predict',
-            transform=None, train_params={}, verbose=True):
+            transform=None, train_params={}, 
+            importance_method='fast', verbose=True):
 
         if not isinstance(eval_metric, (list, tuple, set)):
             eval_metric = [eval_metric]
@@ -227,7 +345,17 @@ class CrossValidator:
                 else:
                     self.pred += self.predict(model, x_test) / K
             
-            self.imps[:, fold_i] = model.get_feature_importances()
+            self.imps[:, fold_i] = model.get_feature_importances(
+                method=importance_method, 
+                importance_params={
+                    'X': x_train, 'y': y_train, 
+                    'X_valid': x_valid, 'y_valid': y_valid, 
+                    'cat_features': \
+                    train_params['cat_features'] if 'cat_features' in train_params.keys() else None, 
+                    'pred_method': prediction, 'iteration': 20, 'eval_metric': eval_metric[0],
+                    'verbose': False
+                }
+            )
             
             for i, _metric in enumerate(eval_metric):
                 score = _metric(y_valid, self.oof[valid_idx])
@@ -333,7 +461,7 @@ class AdversarialValidationInspector:
             assert model
         
         self.X = X
-        self.y = y.copy()
+        self.y = y
 
     def run(self, train_params, verbose=False):
         # Get adversarial score
@@ -362,64 +490,6 @@ class AdversarialValidationInspector:
         order = np.argsort(self.adv_scores)
         if columns is None:  # return index
             return np.arange(len(self.adv_scores))[order[:n]]
-        else:
-            return np.array(columns)[order[:n]]
-
-
-class NullImportanceInspector:
-    '''
-    Feature selection by null importance
-    '''
-    def __init__(self, model, X, y):
-        if isinstance(model, Trainer):
-            self.trainer = deepcopy(model)
-        else:
-            assert model
-        self.X = X
-        self.y = y.copy()
-
-    def run(self, train_params, iteration=10, verbose=False):
-        if verbose:
-            _iter = tqdm(range(iteration), desc='Calculating null importance')
-        else:
-            _iter = range(iteration)
-        self.null_imps = np.empty((iteration, self.X.shape[1]), dtype=np.float16)
-        
-        # Get actual feature importance
-        self.trainer.train(self.X, self.y, **train_params)
-        self.actual_imps = self.trainer.get_feature_importances()
-        
-        # Get null feature importance
-        for i in _iter:
-            _y = np.random.permutation(self.y)
-            self.trainer.train(self.X, _y, **train_params)
-            self.null_imps[i] = self.trainer.get_feature_importances()
-
-        # Calculation feature score
-        null_imps75 = np.percentile(self.null_imps, 75, axis=0)
-        self.imp_scores =  np.log(1e-10 + self.actual_imps / (1 + null_imps75))
-        
-    def show(self, columns=None):
-        if columns is None:
-            columns = [f'feature_{i}' for i in range(self.X.shape[1])]
-
-        plt.figure(figsize=(5, int(len(columns) / 3)))
-        order = np.argsort(self.imp_scores)
-        colors = colormap.winter(np.arange(len(columns))/len(columns))
-        plt.barh(np.array(columns)[order], self.imp_scores[order], color=colors)
-        plt.show()
-
-    def best(self, n=5, columns=None):
-        order = np.argsort(self.imp_scores)[::-1]
-        if columns is None: # return index
-            return np.arange(len(self.imp_scores))[order[:n]]
-        else:
-            return np.array(columns)[order[:n]]
-
-    def worst(self, n=5, columns=None):
-        order = np.argsort(self.imp_scores)
-        if columns is None:  # return index
-            return np.arange(len(self.imp_scores))[order[:n]]
         else:
             return np.array(columns)[order[:n]]
 

@@ -12,7 +12,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from sklearn.metrics import roc_auc_score, confusion_matrix
+from sklearn.metrics import roc_auc_score, confusion_matrix, mean_squared_error
 from .preprocessing import DistTransformer
 
 
@@ -59,7 +59,7 @@ class SeUnderSp(object):
 
         return thres, se, sp
 
-    def test(self, target, approx):
+    def __call__(self, target, approx):
         if not self.maximize:
             return 1 - self._get_se_sp(target, approx)[1]
         else:
@@ -99,3 +99,47 @@ class SeUnderSp(object):
             return 'se', se, self.maximize
         else:
             return '1-se', 1-se, self.maximize
+
+
+class RMSE(object):
+    '''
+    Root mean square error
+    '''
+    def __init__(self, maximize=False):
+        self.maximize = maximize
+
+    def _test(self, target, approx):
+        return np.sqrt(mean_squared_error(target, approx))
+
+    def __call__(self, target, approx):
+        return self._test(target, approx)
+
+    '''
+    CatBoost
+    '''
+    def get_final_error(self, error, weight):
+        return error / weight
+
+    def is_max_optimal(self):
+        return self.maximize
+
+    def evaluate(self, approxes, target, weight=None):
+        # approxes - list of list-like objects (one object per approx dimension)
+        # target - list-like object
+        # weight - list-like object, can be None
+        assert len(approxes[0]) == len(target)
+        if not isinstance(target, np.ndarray):
+            target = np.array(target)
+
+        approx = np.array([v for v in approxes[0]])
+        error_sum = self._test(target, approx)
+        weight_sum = 1.0
+
+        return error_sum, weight_sum
+
+    '''
+    Lightgbm
+    '''
+    def lgbm(self, target, approx):
+        score = self._test(target, approx)
+        return 'error', score, self.maximize
