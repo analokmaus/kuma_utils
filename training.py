@@ -103,11 +103,13 @@ class Trainer:
     def get_best_iteration(self):
         return self.best_iteration
 
-    def predict(self, X):
-        return self.model.predict(X)
-
-    def predict_proba(self, X):
-        return self.model.predict_proba(X)
+    def predict(self, X, method='predict'):
+        if method == 'predict':
+            return self.model.predict(X)
+        elif method == 'binary_proba':
+            return self.model.predict_proba(X)[:, 1]
+        else:
+            raise ValueError(method)
 
     def get_feature_importances(self, method='fast', importance_params={}):
         '''
@@ -196,20 +198,10 @@ class Trainer:
 
         # Get baseline score
         if X_valid is None:
-            if pred_method == 'predict':
-                pred = self.predict(X)
-            elif pred_method == 'binary_proba':
-                pred = self.binary_proba(X)
-            else:
-                pred = self.predict(X)
+            pred = self.predict(X, pred_method)
             baseline_score = eval_metric(y, pred)
         else:
-            if pred_method == 'predict':
-                pred = self.predict(X_valid)
-            elif pred_method == 'binary_proba':
-                pred = self.binary_proba(X_valid)
-            else:
-                pred = self.predict(X_valid)
+            pred = self.predict(X_valid, pred_method)
             baseline_score = eval_metric(y_valid, pred)
         permutation_scores = np.empty(self.input_shape[1])
 
@@ -220,20 +212,10 @@ class Trainer:
             self.train(X_shuffled, y, X_valid, y_valid,
                        cat_features, fit_params)
             if X_valid is None:
-                if pred_method == 'predict':
-                    pred = self.predict(X)
-                elif pred_method == 'binary_proba':
-                    pred = self.binary_proba(X)
-                else:
-                    pred = self.predict(X)
+                pred = self.predict(X, pred_method)
                 permutation_scores[icol] = eval_metric(y, pred)
             else:
-                if pred_method == 'predict':
-                    pred = self.predict(X_valid)
-                elif pred_method == 'binary_proba':
-                    pred = self.binary_proba(X_valid)
-                else:
-                    pred = self.predict(X_valid)
+                pred = self.predict(X_valid, pred_method)
                 permutation_scores[icol] = eval_metric(y_valid, pred)
             del X_shuffled, pred; gc.collect()
 
@@ -277,23 +259,17 @@ class CrossValidator:
         self.pred = None
         self.imps = None
 
-    @staticmethod
-    def binary_proba(model, X):
-        return model.predict_proba(X)[:, 1]
-
-    @staticmethod
-    def predict(model, X):
-        return model.predict(X)
-
     def run(self, X, y, X_test=None, 
             group=None, n_splits=None, 
-            eval_metric=None, prediction='predict',
+            eval_metric=None, 
+            pred_method='predict', prediction=None, 
             transform=None, train_params={}, 
             importance_method='fast', verbose=True):
-
         if not isinstance(eval_metric, (list, tuple, set)):
             eval_metric = [eval_metric]
-
+        if prediction is not None: # depreciated
+            print('[CV] Option "prediction" is depreciated. Use "pred_method" instead.')
+            pred_method = prediction
         if n_splits is None:
             K = self.datasplit.get_n_splits()
         else:
@@ -301,7 +277,6 @@ class CrossValidator:
         self.oof = np.zeros(len(X), dtype=np.float)
         if X_test is not None:
             self.pred = np.zeros(len(X_test), dtype=np.float)
-            
         self.imps = np.zeros((X.shape[1], K))
         self.scores = np.zeros((len(eval_metric), K))
 
@@ -330,20 +305,9 @@ class CrossValidator:
             if verbose > 0:
                 print(f'best iteration is {model.get_best_iteration()}')
 
-            if prediction == 'predict':
-                self.oof[valid_idx] = self.predict(model, x_valid)
-            elif prediction == 'binary_proba':
-                self.oof[valid_idx] = self.binary_proba(model, x_valid)
-            else:
-                self.oof[valid_idx] = self.predict(model, x_valid)
-
+            self.oof[valid_idx] = model.predict(x_valid, pred_method)
             if X_test is not None:
-                if prediction == 'predict':
-                    self.pred += self.predict(model, x_test) / K
-                elif prediction == 'binary_proba':
-                    self.pred += self.binary_proba(model, x_test) / K
-                else:
-                    self.pred += self.predict(model, x_test) / K
+                self.pred += model.predict(x_test, pred_method) / K
             
             self.imps[:, fold_i] = model.get_feature_importances(
                 method=importance_method, 
@@ -352,8 +316,8 @@ class CrossValidator:
                     'X_valid': x_valid, 'y_valid': y_valid, 
                     'cat_features': \
                     train_params['cat_features'] if 'cat_features' in train_params.keys() else None, 
-                    'pred_method': prediction, 'iteration': 20, 'eval_metric': eval_metric[0],
-                    'verbose': False
+                    'pred_method': pred_method, 'iteration': 20, 'eval_metric': eval_metric[0],
+                    'verbose': verbose
                 }
             )
             

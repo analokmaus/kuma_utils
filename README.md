@@ -27,10 +27,10 @@
 
 ┣ training.py
     ┣ Trainer           - いろいろなモデルを学習しやすくするためのラッパー
+                          Permutationやnull importanceの計算も可能
     ┣ CrossValidator    - CVをシュッと行い、結果のセーブやロードも可能
     ┣ InfoldTargetEncoder   - fold内でtarget encodingを行う
     ┣ AdversarialValidationInspector    - Adversarial validationを使った特徴量選択
-    ┣ NullImportanceInspector           - Null importanceを使った特徴量選択
     ┣ StratifiedGroupKFold  - 層別化したGroupKFold
 
 ┣ metrics.py
