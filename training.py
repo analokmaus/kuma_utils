@@ -326,7 +326,7 @@ class CrossValidator:
                 self.scores[i, fold_i] = score
             
             if verbose >= 0:
-                log_str = f'[CV] Fold {fold_i}:'
+                log_str = f'[CV] Fold {fold_i+1}:'
                 log_str += ''.join([f' m{i}={self.scores[i, fold_i]:.5f}' for i in range(len(eval_metric))])
                 log_str += f' (iter {model.get_best_iteration()})'
                 print(log_str)
@@ -519,3 +519,6 @@ class StratifiedGroupKFold:
                 groups) if g in test_groups]
 
             yield train_indices, test_indices
+
+    def get_n_splits(self):
+        return self.n_splits
