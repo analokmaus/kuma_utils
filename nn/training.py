@@ -15,6 +15,7 @@ import torch.utils.data as D
 from .datasets import *
 from .snapshot import *
 from .logger import *
+from .temperature_scaling import *
 
 try:
     from torchsummary import summary
@@ -575,7 +576,7 @@ class TorchTrainer:
             criterion, optimizer, scheduler, 
             loader, num_epochs, loader_valid=None, loader_test=None,
             snapshot_path=None, resume=False,  # Snapshot
-            multi_gpu=True, grad_accumulations=1,  # Train
+            multi_gpu=True, grad_accumulations=1, calibrate_model=False, # Train
             eval_metric=None, eval_interval=1,  # Evaluation
             test_time_augmentations=1, predict_valid=True, predict_test=True,  # Prediction
             event=DummyEvent(), stopper=DummyStopper(),  # Train add-ons
@@ -703,6 +704,13 @@ class TorchTrainer:
                         self.serial, self.current_epoch-self.stopper.state()[1]+1, self.max_epochs))
                     print(f"[{self.serial}] Best score is {self.stopper.score():.6f}")
                 load_snapshots_to_model(str(snapshot_path), self.model)
+
+                if calibrate_model:
+                    if loader_valid is None:
+                        print('loader_valid is necessary for calibration.')
+                    else:
+                        self.calibrate(loader_valid)
+
                 if predict_valid:
                     self.oof = self.predict(
                         loader_valid, test_time_augmentations=test_time_augmentations, verbose=verbose)
@@ -715,6 +723,14 @@ class TorchTrainer:
             if verbose:
                 print(f"[{self.serial}] Best score is {self.stopper.score():.6f}")
             load_snapshots_to_model(str(snapshot_path), self.model)
+
+            if calibrate_model:
+                if loader_valid is None:
+                    print('loader_valid is necessary for calibration.')
+                else:
+                    self.calibrate(loader_valid)
+
+
             if predict_valid:
                 if loader_valid is None:
                     self.oof = self.predict(
@@ -725,6 +741,14 @@ class TorchTrainer:
             if predict_test:
                 self.pred = self.predict(
                     loader_test, test_time_augmentations=test_time_augmentations, verbose=verbose)
+    
+    def calibrate(self, loader, inplace=True):
+        if inplace:
+            self.model = SoftmaxWithTemperature(self.model)
+            self.model.set_temperature(loader)
+        else:
+            self.scaled_model = SoftmaxWithTemperature(self.model)
+            self.scaled_model.set_temperature(loader)
 
 
 '''
@@ -732,9 +756,10 @@ Cross Validation for Tabular data
 '''
 
 class TorchCV: 
-    IGNORE_PARAMS = [
+    IGNORE_PARAMS = {
         'loader', 'loader_valid', 'loader_test', 'snapshot_path', 'logger'
-    ]
+    }
+    TASKS = {'binary', 'regression'}
 
     def __init__(self, model, datasplit, device=None):
         if device is None:
@@ -751,8 +776,8 @@ class TorchCV:
         self.imps = None
 
     def run(self, X, y, X_test=None,
-            group=None, n_splits=None, transform=None,
-            eval_metric=None, batch_size=64, 
+            group=None, transform=None, task='binary', 
+            eval_metric=None, batch_size=64, n_splits=None,
             snapshot_dir=None, logger=DummyLogger(''), 
             fit_params={}, verbose=True):
         
@@ -762,18 +787,18 @@ class TorchCV:
             snapshot_dir = Path().cwd()
         if not isinstance(snapshot_dir, Path):
             snapshot_dir = Path(snapshot_dir)
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
         assert snapshot_dir.is_dir()
+        assert task in self.TASKS
             
         if n_splits is None:
             K = self.datasplit.get_n_splits()
         else:
             K = n_splits
 
-        self.oof = np.zeros(len(X), dtype=np.float)
-        if X_test is not None:
-            self.pred = np.zeros(len(X_test), dtype=np.float)
         self.imps = np.zeros((X.shape[1], K))
         self.scores = np.zeros((len(eval_metric), K))
+        self.numpy2dataset = Numpy2Dataset(task)
 
         default_path = snapshot_dir/'default.pt'
         save_snapshots(0, self.model, fit_params['optimizer'], fit_params['scheduler'], default_path)
@@ -798,9 +823,9 @@ class TorchCV:
                     Xs=(x_train, x_valid), ys=(y_train, y_valid),
                     X_test=x_test)
 
-            ds_train = numpy2dataset(x_train, y_train)
-            ds_valid = numpy2dataset(x_valid, y_valid)
-            ds_test = numpy2dataset(x_test, np.arange(len(x_test)))
+            ds_train = self.numpy2dataset(x_train, y_train)
+            ds_valid = self.numpy2dataset(x_valid, y_valid)
+            ds_test = self.numpy2dataset(x_test, np.arange(len(x_test)))
 
             loader_train = D.DataLoader(ds_train, batch_size=batch_size, shuffle=True)
             loader_valid = D.DataLoader(ds_valid, batch_size=batch_size, shuffle=False)
@@ -820,9 +845,14 @@ class TorchCV:
             trainer_fold = TorchTrainer(self.model, self.device, serial=f'fold_{fold_i}')
             trainer_fold.fit(**params_fold)
 
-            self.oof[valid_idx] = trainer_fold.oof.squeeze()
+            if fold_i == 0: # Initialize oof and prediction
+                self.oof = np.zeros((len(X), trainer_fold.oof.shape[1]), dtype=np.float)
+                if X_test is not None:
+                    self.pred = np.zeros((len(X_test), trainer_fold.pred.shape[1]), dtype=np.float)
+
+            self.oof[valid_idx] = trainer_fold.oof
             if X_test is not None:
-                self.pred += trainer_fold.pred.squeeze() / K
+                self.pred += trainer_fold.pred / K
 
             for i, _metric in enumerate(eval_metric):
                 score = _metric(y_valid, self.oof[valid_idx])

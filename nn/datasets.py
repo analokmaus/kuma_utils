@@ -25,7 +25,23 @@ def category2embedding(df, categorical_features, dim='auto'):
     return emb_dims
 
 
-def numpy2dataset(X, y):
+class Numpy2Dataset:
+
+    def __init__(self, task='binary'):
+        self.task = 'binary'
+    
+    def __call__(self, X, y):
+        if self.task == 'binary':
+            return D.TensorDataset(
+                torch.tensor(X.astype(np.float32)).float(),
+                torch.tensor(y).long().squeeze())
+        elif self.task == 'regression':
+            return D.TensorDataset(
+                torch.tensor(X.astype(np.float32)).float(),
+                torch.tensor(y.astype(np.float32)).float().reshape(-1, 1))
+                
+
+def numpy2dataset(X, y, task='binary'):
     return D.TensorDataset(
-        torch.tensor(X.astype(np.float32)), 
-        torch.tensor(y.astype(np.float32).reshape(-1, 1)))
+        torch.tensor(X.astype(np.float32)).float(), 
+        torch.tensor(y).long().squeeze())

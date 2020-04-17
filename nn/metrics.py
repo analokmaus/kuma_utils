@@ -4,7 +4,7 @@ from sklearn.metrics import roc_auc_score
 
 
 def auc(_y, y):
-    _y = np.squeeze(_y.data.cpu().numpy())
+    _y = _y.data.cpu().numpy()[:, 1]
     y = np.squeeze(y.data.cpu().numpy())
     try:
         return roc_auc_score(y, _y)

@@ -16,10 +16,6 @@ from sklearn.metrics import roc_auc_score, confusion_matrix, mean_squared_error
 from .preprocessing import DistTransformer
 
 
-'''
-Custom metrics
-'''
-
 class SeUnderSp(object):
     '''
     Maximize sensitivity under specific specificity threshold
@@ -47,7 +43,16 @@ class SeUnderSp(object):
             target = np.array(target)
         if not isinstance(approx, np.ndarray):
             approx = np.array(approx)
-        
+
+        if len(approx.shape) == 1:
+            pass
+        elif approx.shape[1] == 1:
+            approx = np.squeeze(approx)
+        elif approx.shape[1] == 2:
+            approx = approx[:, 1]
+        else:
+            raise ValueError(f'Invalid approx shape: {approx.shape}')
+
         if min(approx) < 0:
             approx -= min(approx) # make all values positive
         target = target.astype(int)
@@ -100,6 +105,15 @@ class SeUnderSp(object):
         else:
             return '1-se', 1-se, self.maximize
 
+    '''
+    PyTorch
+    '''
+    def torch(self, approx, target):
+        _approx = approx.cpu().numpy()
+        _target = target.cpu().numpy()
+        se = self._get_se_sp(_target, _approx)[1]
+        return se
+
 
 class RMSE(object):
     '''
@@ -143,3 +157,68 @@ class RMSE(object):
     def lgbm(self, target, approx):
         score = self._test(target, approx)
         return 'error', score, self.maximize
+    
+    '''
+    Pytorch
+    '''
+    def torch(self, appox, target):
+        return self._test(target.detach().cpu().numpy(),
+                         approx.detach().cpu().numpy())
+
+
+class AUC(object):
+    '''
+    Area under ROC curve
+    '''
+    def __init__(self, maximize=True):
+        self.maximize = maximize
+
+    def _test(self, target, approx):
+        if len(approx.shape) == 1:
+            approx = approx
+        elif approx.shape[1] == 1:
+            approx = np.squeeze(approx)
+        elif approx.shape[1] == 2:
+            approx = approx[:, 1]
+        else:
+            raise ValueError(f'Invalid approx shape: {approx.shape}')
+        return roc_auc_score(target, approx)
+
+    def __call__(self, target, approx):
+        return self._test(target, approx)
+    
+    '''
+    Pytorch
+    '''
+    def torch(self, approx, target):
+        return self._test(target.detach().cpu().numpy(), 
+                          approx.detach().cpu().numpy())
+       
+        
+
+class Accuracy(object):
+    '''
+    Accuracy
+    '''
+
+    def __init__(self, maximize=True):
+        self.maximize = maximize
+
+    def _test(self, target, approx):
+        if len(approx.shape) == 1:
+            approx = approx
+        elif approx.shape[1] == 1:
+            approx = np.squeeze(approx)
+        elif approx.shape[1] >= 2:
+            approx = np.argmax(approx, axis=1)
+        return np.mean((target == approx).astype(int))
+
+    def __call__(self, target, approx):
+        return self._test(target, approx)
+
+    '''
+    Pytorch
+    '''
+    def torch(self, approx, target):
+        return self._test(target.detach().cpu().numpy(), 
+                          approx.detach().cpu().numpy())

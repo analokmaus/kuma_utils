@@ -33,19 +33,19 @@
     ┣ AdversarialValidationInspector    - Adversarial validationを使った特徴量選択
     ┣ StratifiedGroupKFold  - 層別化したGroupKFold
 
-┣ metrics.py
+┣ metrics.py            - 各種ライブラリ用のmetric
     ┣ SeUnderSp         - 特異度固定時の感度を最大する目的関数
+    ┣ RMSE
+    ┣ AUC
+    ┣ Accuracy
 
-┣ nn                    - PyTorchのための道具たち
+┣ nn                            - PyTorchのための道具たち
     ┣ datasets.py
         ┣ category2embedding    - カテゴリカル変数をembedding層に入れるための前処理
+        ┣ Numpy2Dataset         - ndarrayをpytorch datasetに変換する
 
     ┣ logger.py
         ┣ Logger                - TensorBoard形式のログを記録する奴
-
-    ┣ metrics.py                - PyTorch用のmetrics
-        ┣ auc
-        ┣ accuracy
 
     ┣ models.py
         ┣ TabularNet            - テーブルデータをスマートに学習してくれるDNN
@@ -133,7 +133,7 @@ NN_FIT_PARAMS = {
     'stopper': EarlyStopping(patience=20, maximize=True),
     'logger': Logger('results/test/'), 
     'snapshot_path': Path('results/test/nn_best.pt'),
-    'eval_metric': auc,
+    'eval_metric': AUC().torch,
     'info_format': '[epoch] time data loss metric earlystopping',
     'info_train': True,
     'info_interval': 3
@@ -152,8 +152,9 @@ NN_FIT_PARAMS = {
     'optimizer': optimizer,
     'scheduler': StepLR(optimizer, step_size=10, gamma=0.9),
     'num_epochs': 50, 
+    'calibrate_model': True, 
     'stopper': EarlyStopping(patience=5, maximize=True),
-    'eval_metric': auc,
+    'eval_metric': AUC().torch,
     'info_format': '[epoch] time data loss metric earlystopping',
     'info_train': False,
     'info_interval': 5,
@@ -162,8 +163,8 @@ NN_FIT_PARAMS = {
 
 dnn_cv = TorchCV(model, skf)
 dnn_cv.run(
-    X, y, x_test, 
-    eval_metric=[roc_auc_score, SeUnderSp(sp=0.9)], 
+    X, y, x_test, task='binary', 
+    eval_metric=[AUC(), Accuracy(), SeUnderSp(sp=0.9)], 
     batch_size=2048,
     snapshot_dir='results/test/',
     fit_params=NN_FIT_PARAMS, 

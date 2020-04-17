@@ -31,10 +31,10 @@ class CustomLinear(nn.Module):
 
 class TabularNet(nn.Module):
     '''
-    Smart dense neral network for tabular data.
-    [Input]
-        categorical_features (list of int) : indice of categorical features
-        emb_dims : [(unique value count, output dimension), ...]
+    Smart dense neural network for tabular data.
+    # Input
+    categorical_features: list of int  = indice of categorical features
+    emb_dims: unique value count, output dimension), ...]
     '''
 
     def __init__(self, 
