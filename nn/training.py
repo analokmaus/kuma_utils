@@ -140,271 +140,12 @@ class DummyEvent:
     def __init__(self):
         pass
 
-    def __call__(self, model, optimizer, scheduler, stopper, 
-                 criterion, eval_metric, i_epoch, log):
-        return model, optimizer, scheduler, stopper, criterion, eval_metric
-
+    def __call__(self, **kwargs):
+        pass
 
 '''
 Trainer
 '''
-
-class NeuralTrainer:  # depreciated
-    '''
-    # Important:
-    This one is depreciated. Use TorchTrainer instead.
-
-    Trainer for pytorch models
-    '''
-
-    def __init__(self, model, optimizer, scheduler, device=None, tta=1):
-        if device is None:
-            device = torch.device(
-                "cuda" if torch.cuda.is_available() else "cpu")
-
-        self.model = model
-        self.device = device
-        self.model.to(self.device)
-        self.optimizer = optimizer
-        self.scheduler = scheduler
-
-    def train(self, 
-              loader, criterion, num_epochs, snapshot_path, 
-              loader_valid=None, loader_test=None, tta=1,
-              eval_metric=None, 
-              logger=None, event=None, stopper=None,
-              resume=False,
-              grad_accumulations=1, eval_interval=1, 
-              log_interval=10, log_verbosity=1, 
-              predict_oof=True, predict_pred=True,
-              name='', verbose=True):
-
-        if logger is None:
-            logger = DummyLogger('')
-        if event is None:
-            event = DummyEvent()
-        if stopper is None:
-            stopper = DummyStopper()
-        if eval_metric is None:
-            eval_metric = lambda x, y: -1 * criterion(x, y).item()
-            if verbose:
-                print(f'[NT] eval_metric is not set. inversed criterion will be used instead.')
-
-        start_epoch = 0
-        self.tta = tta # test time augmentation
-        self.log = defaultdict(dict)
-        self.log['train']['loss'] = []
-        self.log['train']['score'] = []
-        self.log['valid']['loss'] = []
-        self.log['valid']['score'] = []
-
-        if resume:
-            load_snapshots_to_model(snapshot_path, 
-                self.model, self.optimizer, self.scheduler)
-            start_epoch = load_epoch(snapshot_path)
-            if verbose:
-                print(f'[NT] {snapshot_path} is loaded. Continuing from epoch {start_epoch}.')
-
-        if torch.cuda.device_count() > 1:
-            self.model = torch.nn.DataParallel(self.model)
-            if verbose:
-                print(f'[NT] {torch.cuda.device_count()} gpus found.')
-
-        _align = len(str(start_epoch+num_epochs))
-        
-        for _epoch, epoch in enumerate(range(start_epoch, start_epoch+num_epochs)):
-            start_time = time.time()
-            self.scheduler.step()
-
-            '''
-            Run event
-            '''
-            self.model, self.optimizer, self.scheduler, stopper, criterion, eval_metric = \
-                event(self.model, self.optimizer, self.scheduler, 
-                      stopper, criterion, eval_metric, _epoch, self.log)
-            
-            '''
-            Train
-            '''
-            loss_train = 0.0
-            score_train = 0.0
-            total_batch = len(loader.dataset) / loader.batch_size
-
-            self.model.train()
-            for batch_i, (X, y) in enumerate(loader):
-                batches_done = len(loader) * epoch + batch_i
-
-                X = X.to(self.device)
-                _y = self.model(X)
-                y = y.to(self.device)
-                loss = criterion(_y, y)
-                loss.backward()
-
-                if _epoch == 0 and batch_i == 0:
-                    # Save output dimension in the first run
-                    self.out_dim = _y.shape[1:]
-
-                if batches_done % grad_accumulations == 0:
-                    # Accumulates gradient before each step
-                    self.optimizer.step()
-                    self.optimizer.zero_grad()
-
-                if batch_i % log_interval == 0:
-                    score = eval_metric(_y, y)
-                    for param_group in self.optimizer.param_groups:
-                        learning_rate = param_group['lr']
-                    evaluation_metrics = [
-                        (f'score_{name}', score),
-                        (f'loss_{name}', loss.item()),
-                        (f'lr_{name}', learning_rate)
-                    ]
-                    logger.list_of_scalars_summary(evaluation_metrics, batches_done)
-
-                batch_weight = len(X) / loader.batch_size
-                loss_train += loss.item() / total_batch * batch_weight
-                score_train += score / total_batch * batch_weight
-
-            self.log['train']['loss'].append(loss_train)
-            self.log['train']['score'].append(score_train)
-
-            current_time = time.strftime(
-                '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 20 else ''
-            log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch+num_epochs}] Trn '
-            log_str += f"loss={loss_train:.6f} score={score_train:.6f}"
-
-            '''
-            No validation set
-            '''
-            if loader_valid is None:
-                early_stopping_target = score_train
-
-                if stopper(early_stopping_target): # score improved
-                    save_snapshots(epoch, 
-                        self.model, self.optimizer, self.scheduler, snapshot_path)
-                    log_str += f' best={stopper.score():.6f}'
-                else:
-                    log_str += f' best={stopper.score():.6f}*({stopper.state()[0]})'
-
-                if verbose and epoch % log_verbosity == 0:
-                    print(log_str)
-
-                if stopper.stop():
-                    print("[NT] Training stopped by overfit detector. ({}/{})".format(
-                        epoch-stopper.state()[1]+1, start_epoch+num_epochs))
-                    print(f"[NT] Best score is {stopper.score():.6f}")
-                    load_snapshots_to_model(str(snapshot_path), self.model)
-                    if predict_oof:
-                        self.oof = self.predict(loader, verbose=verbose)
-                    if predict_pred:
-                        self.pred = self.predict(loader_test, verbose=verbose)
-                    break
-
-                continue
-
-            '''
-            Validation
-            '''
-            if verbose and int(str(verbose)[-1]) >= 2 and epoch % log_verbosity == 0:  
-                # Show log of training set
-                print(log_str)
-
-            if epoch % eval_interval == 0:
-                loss_valid = 0.0
-                score_valid = 0.0
-                total_batch = len(loader_valid.dataset) / loader_valid.batch_size
-                self.model.eval()
-                with torch.no_grad():
-                     for X, y in loader_valid:
-                        X = X.to(self.device)
-                        _y = self.model(X)
-                        y = y.to(self.device)
-                        loss = criterion(_y, y)
-                        score = eval_metric(_y, y)
-
-                        batch_weight = len(X) / loader_valid.batch_size
-                        loss_valid += loss.item() / total_batch * batch_weight
-                        score_valid += score / total_batch * batch_weight
-
-                self.log['valid']['loss'].append(loss_valid)
-                self.log['valid']['score'].append(score_valid)
-                
-                current_time = time.strftime(
-                    '%H:%M:%S', time.gmtime()) + ' ' if verbose >= 20 else ''
-                log_str = f'{current_time}[{epoch+1:0{_align}d}/{start_epoch+num_epochs}] Val '
-                log_str += f"loss={loss_valid:.6f} score={score_valid:.6f}"
-                evaluation_metrics = [
-                    (f"score_valid({name})", score_valid),
-                    (f"loss_valid({name})", loss_valid)
-                ]
-                logger.list_of_scalars_summary(evaluation_metrics, epoch)
-
-                early_stopping_target = score_valid
-                if stopper(early_stopping_target):  # score updated
-                    save_snapshots(
-                        epoch, self.model, self.optimizer, self.scheduler, snapshot_path)
-                    log_str += f' best={stopper.score():.6f}'
-                else:
-                    log_str += f' best={stopper.score():.6f}*({stopper.state()[0]})'
-
-                if verbose and epoch % log_verbosity == 0:
-                    print(log_str)
-
-            if stopper.stop():
-                print("[NT] Training stopped by overfit detector. ({}/{})".format(
-                    epoch-stopper.state()[1]+1, start_epoch+num_epochs))
-                print(f"[NT] Best score is {stopper.score():.6f}")
-                load_snapshots_to_model(str(snapshot_path), self.model)
-                if predict_oof:
-                    self.oof = self.predict(loader_valid, verbose=verbose)
-                if predict_pred:
-                    self.pred = self.predict(loader_test, verbose=verbose)
-                break
-
-        else: # Not stopped by overfit detector
-            print(f"[NT] Best score is {stopper.score():.6f}")
-            load_snapshots_to_model(str(snapshot_path), self.model)
-            if predict_oof:
-                if loader_valid is None:
-                    self.oof = self.predict(loader, verbose=verbose)
-                else:
-                    self.oof = self.predict(loader_valid, verbose=verbose)
-            if predict_pred:
-                self.pred = self.predict(loader_test, verbose=verbose)
-
-    def predict(self, loader, path=None, verbose=True):
-        if loader is None:
-            print('[NT] No data loaded. Skipping prediction...')
-            return None
-        if self.tta < 1:
-            self.tta = 1
-        batch_size = loader.batch_size
-        prediction = np.zeros(
-            (len(loader.dataset), *self.out_dim), dtype=np.float16)
-
-        self.model.eval()
-        with torch.no_grad():
-            for _epoch in range(self.tta):
-                for batch_i, (X, _) in enumerate(loader):
-                    X = X.to(self.device)
-                    _y = self.model(X).detach()
-                    _y = _y.cpu().numpy()
-                    idx = (batch_i*batch_size, (batch_i+1)*batch_size)
-                    prediction[idx[0]:idx[1]] = _y / self.tta
-        
-        if path is not None:
-            np.save(path, prediction)
-
-        if verbose:
-            print(f'[NT] Prediction done. exported to {path}')
-
-        return prediction
-
-    def info(self, input_shape):
-        try:
-            print(summary(self.model, input_shape))
-        except:
-            print('')
-
 
 class TorchTrainer:
     '''
@@ -556,7 +297,7 @@ class TorchTrainer:
             elif item == 'data':
                 log_str += info[item]
             elif item in ['loss', 'metric']:
-                log_str += f'{item}={info[item]:.6f}'
+                log_str += f'{item}={info[item]:.{self.round_float}f}'
             elif item == 'epoch':
                 align = len(str(self.max_epochs))
                 log_str += f'E{self.current_epoch:0{align}d}/{self.max_epochs}'
@@ -564,7 +305,7 @@ class TorchTrainer:
                 counter, patience = self.stopper.state()
                 best = self.stopper.score()
                 if best is not None:
-                    log_str += f'best={best:.6f}'
+                    log_str += f'best={best:.{self.round_float}f}'
                     if counter > 0:
                         log_str += f'*({counter}/{patience})'
             log_str += sep
@@ -582,7 +323,7 @@ class TorchTrainer:
             event=DummyEvent(), stopper=DummyStopper(),  # Train add-ons
             # Logger and info
             logger=DummyLogger(''), logger_interval=1, 
-            info_train=True, info_valid=True, info_interval=1, 
+            info_train=True, info_valid=True, info_interval=1, round_float=6,
             info_format='epoch time data loss metric earlystopping', verbose=True):
 
         if eval_metric is None:
@@ -604,6 +345,8 @@ class TorchTrainer:
         }
         info_items = re.split(r'[^a-z]+', info_format)
         info_seps = re.split(r'[a-z]+', info_format)
+        self.round_float = round_float
+
         if snapshot_path is None:
             snapshot_path = Path().cwd()
         if not isinstance(snapshot_path, Path):
@@ -636,9 +379,10 @@ class TorchTrainer:
             self.scheduler.step()
 
             ### Event
-            self.model, self.optimizer, self.scheduler, self.stopper, self.criterion, self.eval_metric = \
-                event(self.model, self.optimizer, self.scheduler,
-                      self.stopper, self.criterion, self.eval_metric, epoch, self.log)
+            # self.model, self.optimizer, self.scheduler, self.stopper, self.criterion, self.eval_metric = \
+            event(**{'model': self.model, 'optimizer': self.optimizer, 'scheduler': self.scheduler,
+                     'stopper': self.stopper, 'criterion': self.criterion, 'eval_metric': self.eval_metric, 
+                     'epoch': epoch, 'global_epoch': self.current_epoch, 'log': self.log})
 
             ### Training
             loss_train, metric_train = self.train_loop(loader, grad_accumulations, logger_interval)
@@ -662,7 +406,7 @@ class TorchTrainer:
                     if verbose:
                         print("[{}] Training stopped by overfit detector. ({}/{})".format(
                             self.serial, self.current_epoch-self.stopper.state()[1]+1, self.max_epochs))
-                        print(f"[{self.serial}] Best score is {self.stopper.score():.6f}")
+                        print(f"[{self.serial}] Best score is {self.stopper.score():.{self.round_float}f}")
                     load_snapshots_to_model(str(snapshot_path), self.model)
                     if predict_valid:
                         self.oof = self.predict(
@@ -702,7 +446,8 @@ class TorchTrainer:
                 if verbose:
                     print("[{}] Training stopped by overfit detector. ({}/{})".format(
                         self.serial, self.current_epoch-self.stopper.state()[1]+1, self.max_epochs))
-                    print(f"[{self.serial}] Best score is {self.stopper.score():.6f}")
+                    print(
+                        f"[{self.serial}] Best score is {self.stopper.score():.{self.round_float}f}")
                 load_snapshots_to_model(str(snapshot_path), self.model)
 
                 if calibrate_model:
@@ -721,7 +466,8 @@ class TorchTrainer:
 
         else:  # Not stopped by overfit detector
             if verbose:
-                print(f"[{self.serial}] Best score is {self.stopper.score():.6f}")
+                print(
+                    f"[{self.serial}] Best score is {self.stopper.score():.{self.round_float}f}")
             load_snapshots_to_model(str(snapshot_path), self.model)
 
             if calibrate_model:
@@ -813,19 +559,16 @@ class TorchCV:
         for fold_i, (train_idx, valid_idx) in enumerate(
             self.datasplit.split(X, y, group)):
 
-            x_train, x_valid = X[train_idx], X[valid_idx]
-            y_train, y_valid = y[train_idx], y[valid_idx]
-            if X_test is not None:
-                x_test = X_test.copy()
+            Xs = {'train': X[train_idx], 'valid': X[valid_idx],
+                  'test': X_test.copy() if X_test is not None else None}
+            ys = {'train': y[train_idx], 'valid': y[valid_idx]}
 
             if transform is not None:
-                x_train, x_valid, y_train, y_valid, x_test = transform(
-                    Xs=(x_train, x_valid), ys=(y_train, y_valid),
-                    X_test=x_test)
+                transform(Xs, ys)
 
-            ds_train = self.numpy2dataset(x_train, y_train)
-            ds_valid = self.numpy2dataset(x_valid, y_valid)
-            ds_test = self.numpy2dataset(x_test, np.arange(len(x_test)))
+            ds_train = self.numpy2dataset(Xs['train'], ys['train'])
+            ds_valid = self.numpy2dataset(Xs['valid'], ys['valid'])
+            ds_test = self.numpy2dataset(Xs['test'], np.arange(len(Xs['test'])))
 
             loader_train = D.DataLoader(ds_train, batch_size=batch_size, shuffle=True)
             loader_valid = D.DataLoader(ds_valid, batch_size=batch_size, shuffle=False)
@@ -855,7 +598,7 @@ class TorchCV:
                 self.pred += trainer_fold.pred / K
 
             for i, _metric in enumerate(eval_metric):
-                score = _metric(y_valid, self.oof[valid_idx])
+                score = _metric(ys['valid'], self.oof[valid_idx])
                 self.scores[i, fold_i] = score
 
             if verbose >= 0:

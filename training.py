@@ -25,6 +25,7 @@ from lightgbm import LGBMRegressor, LGBMClassifier, Dataset
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge, Lasso
 from sklearn.metrics import roc_auc_score
+from sklearn.calibration import calibration_curve, CalibratedClassifierCV
 
 try:
     import category_encoders as ce
@@ -41,13 +42,12 @@ Training automation
 
 class Trainer:
     '''
-    Make machine learning eazy again!
+    Make machine learning easy again!
 
     # Usage
     model = Trainer(CatBoostClassifier(**CAT_PARAMS))
     model.train(x_train, y_train, x_valid, y_valid, fit_params={})
     '''
-
     MODELS = {
         'CatBoostRegressor', 'CatBoostClassifier', 
         'LGBMRegressor', 'LGBMClassifier',
@@ -66,9 +66,18 @@ class Trainer:
         self.is_trained = False
         self.null_importances = None
         self.permutation_importances = None
+        self.cal_model = None
     
-    def train(self, X, y, X_valid=None, y_valid=None,
-              cat_features=None, fit_params={}):
+    def train(self, X, y, 
+              X_valid=None, y_valid=None, 
+              categorical_features=None, cat_features=None, fit_params={}, 
+              calibration=False, calibration_params={'method': 'isotonic', 'cv': 3}):
+
+        if cat_features is None and categorical_features is not None:
+            cat_features = categorical_features
+        elif cat_features is not None and categorical_features is not None:
+            print('cat_features and categorical_features conflicts. cat_features will be ignored.')
+            cat_features = categorical_features
         self.input_shape = X.shape
 
         if self.model_type[:8] == 'CatBoost':
@@ -97,6 +106,10 @@ class Trainer:
 
         self.is_trained = True
 
+        if calibration:
+            self.cal_model = CalibratedClassifierCV(self.model, **calibration_params)
+            self.cal_model.fit(X, y)
+
     def get_model(self):
         return self.model
 
@@ -104,17 +117,24 @@ class Trainer:
         return self.best_iteration
 
     def predict(self, X, method='predict'):
+        if X is None:
+            print('No data to predict.')
+            return None
+        if self.cal_model is None:
+            _model = self.model
+        else:
+            _model =  self.cal_model
+
         if method == 'predict':
-            return self.model.predict(X)
+            return _model.predict(X)
         elif method == 'binary_proba':
-            return self.model.predict_proba(X)[:, 1]
+            return _model.predict_proba(X)
+        elif method == 'binary_proba_positive':
+            return _model.predict_proba(X)[:, 1]
         else:
             raise ValueError(method)
 
     def get_feature_importances(self, method='fast', importance_params={}):
-        '''
-        # 
-        '''
         if method == 'auto':
             if self.model_type in ['CatBoostRegressor', 'CatBoostClassifier',
                                    'LGBMRegressor', 'LGBMClassifier',
@@ -144,15 +164,6 @@ class Trainer:
                 return self.null_importances
         else:
             raise ValueError(method)
-
-    def get_coef(self):
-        if self.model_type in ['LinearRegression', 'LogisticRegression',
-                               'Ridge', 'Lasso']:
-            return self.model.coef_
-        elif self.model_type in ['SVR', 'SVC'] and self.model.get_params()['kernel'] == 'linear':
-            return self.model.coef_
-        else:
-            return np.zeros(self.input_shape[1])
 
     def get_null_importances(self, X, y, X_valid=None, y_valid=None,
                             cat_features=None, fit_params={}, prediction='predict',
@@ -224,7 +235,16 @@ class Trainer:
         self.permutation_importances = permutation_importances
         return permutation_importances
 
-    def plot_feature_importances(self, columns=None, method='fast'):
+    def get_coeffcients(self):
+        if self.model_type in ['LinearRegression', 'LogisticRegression',
+                               'Ridge', 'Lasso']:
+            return self.model.coef_
+        elif self.model_type in ['SVR', 'SVC'] and self.model.get_params()['kernel'] == 'linear':
+            return self.model.coef_
+        else:
+            return np.zeros(self.input_shape[1])
+
+    def plot_feature_importances(self, columns=None):
         imps = self.get_feature_importances(method, verbose=True)
 
         if columns is None:
@@ -239,15 +259,16 @@ class Trainer:
 
 class CrossValidator:
     '''
-    Make cross validation beautiful again?
+    Make cross validation easy again
     
     # Usage
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
     cat_cv = CrossValidator(CatBoostClassifier(**CAT_PARAMS), skf)
     cat_cv.run(
         X, y, x_test, 
-        eval_metric=roc_auc_score, prediction='predict', 
-        train_params={'cat_features': CAT_IDXS, 'fit_params': CAT_FIT_PARAMS},
+        eval_metric=AUC(), prediction='predict', 
+        cat_features=CAT_IDXS,
+        fit_params=CAT_FIT_PARAMS,
         verbose=0
     )
     '''
@@ -259,81 +280,97 @@ class CrossValidator:
         self.pred = None
         self.imps = None
 
-    def run(self, X, y, X_test=None, 
-            group=None, n_splits=None, 
-            eval_metric=None, 
-            pred_method='predict', prediction=None, 
-            transform=None, train_params={}, 
-            importance_method='fast', verbose=True):
-        if not isinstance(eval_metric, (list, tuple, set)):
-            eval_metric = [eval_metric]
+    def run(self, X, y, X_test=None, group=None, n_splits=None, 
+            # Dataset
+            cat_features=None, categorical_features=None, transform=None, 
+            fit_params={}, eval_metric=None,  # Training
+            # Prediction
+            pred_method='predict', prediction=None, importance_method='fast', 
+            calibration=False, calibration_params={'method':'isotonic', 'cv':3}, 
+            # Logger
+            print_time=True, round_float=6, verbose=True):
+
+        if cat_features is None and categorical_features is not None:
+            cat_features = categorical_features
+        elif cat_features is not None and categorical_features is not None:
+            print('cat_features and categorical_features conflicts. cat_features will be ignored.')
+            cat_features = categorical_features
         if prediction is not None: # depreciated
             print('[CV] Option "prediction" is depreciated. Use "pred_method" instead.')
             pred_method = prediction
-        if n_splits is None:
-            K = self.datasplit.get_n_splits()
-        else:
-            K = n_splits
-        self.oof = np.zeros(len(X), dtype=np.float)
-        if X_test is not None:
-            self.pred = np.zeros(len(X_test), dtype=np.float)
+        if not isinstance(eval_metric, (list, tuple, set)):
+            eval_metric = [eval_metric]
+
+        K = self.datasplit.get_n_splits() if n_splits is None else n_splits
         self.imps = np.zeros((X.shape[1], K))
         self.scores = np.zeros((len(eval_metric), K))
 
         for fold_i, (train_idx, valid_idx) in enumerate(
             self.datasplit.split(X, y, group)):
 
-            x_train, x_valid = X[train_idx], X[valid_idx]
-            y_train, y_valid = y[train_idx], y[valid_idx]
-            if X_test is not None:
-                x_test = X_test.copy()
+            Xs = {'train': X[train_idx], 'valid': X[valid_idx], 
+                  'test': X_test.copy() if X_test is not None else None}
+            ys = {'train': y[train_idx], 'valid': y[valid_idx]}
 
             if transform is not None:
-                x_train, x_valid, y_train, y_valid, x_test = transform(
-                    Xs=(x_train, x_valid), ys=(y_train, y_valid), 
-                    X_test=x_test)
+                transform(Xs, ys)
 
             if verbose > 0:
-                print(f'\n-----\n {K} fold cross validation. \n Starting fold {fold_i+1}\n-----\n')
+                print(f'\n\n-----\n {K} fold cross validation. \n Starting fold {fold_i+1}\n-----\n')
                 print(f'[CV]train: {len(train_idx)} / valid: {len(valid_idx)}')
-            if verbose <= 0 and 'fit_params' in train_params.keys():
-                train_params['fit_params']['verbose'] = 0
-            model = Trainer(copy(self.basemodel))
-            model.train(x_train, y_train, x_valid, y_valid, **train_params)
+
+            model = Trainer(deepcopy(self.basemodel))
+            model.train(
+                Xs['train'], ys['train'], Xs['valid'], ys['valid'], 
+                cat_features=cat_features, fit_params=fit_params,
+                calibration=calibration, calibration_params=calibration_params
+            )
             self.models.append(model.get_model())
+            oof = model.predict(Xs['valid'], pred_method)
+            if X_test is not None:
+                pred = model.predict(Xs['test'], pred_method) / K 
 
             if verbose > 0:
                 print(f'best iteration is {model.get_best_iteration()}')
 
-            self.oof[valid_idx] = model.predict(x_valid, pred_method)
+            if fold_i == 0:  # Initialize oof and prediction
+                if len(oof.shape) == 1:
+                    self.oof = np.zeros(X.shape[0], dtype=np.float)
+                    if X_test is not None:
+                        self.pred = np.zeros(X_test.shape[0], dtype=np.float)
+                else:
+                    self.oof = np.zeros((X.shape[0], oof.shape[1]), dtype=np.float)
+                    if X_test is not None:
+                        self.pred = np.zeros((X_test.shape[0], pred.shape[1]), dtype=np.float)
+
+            self.oof[valid_idx] = oof
             if X_test is not None:
-                self.pred += model.predict(x_test, pred_method) / K
+                self.pred += pred
             
             self.imps[:, fold_i] = model.get_feature_importances(
                 method=importance_method, 
                 importance_params={
-                    'X': x_train, 'y': y_train, 
-                    'X_valid': x_valid, 'y_valid': y_valid, 
-                    'cat_features': \
-                    train_params['cat_features'] if 'cat_features' in train_params.keys() else None, 
-                    'pred_method': pred_method, 'iteration': 20, 'eval_metric': eval_metric[0],
+                    'X': Xs['train'], 'y': ys['train'],
+                    'X_valid': Xs['valid'], 'y_valid': ys['valid'],
+                    'cat_features': cat_features, 'pred_method': pred_method, 
+                    'iteration': 20, 'eval_metric': eval_metric[0],
                     'verbose': verbose
                 }
             )
             
             for i, _metric in enumerate(eval_metric):
-                score = _metric(y_valid, self.oof[valid_idx])
+                score = _metric(ys['valid'], oof)
                 self.scores[i, fold_i] = score
             
             if verbose >= 0:
                 log_str = f'[CV] Fold {fold_i+1}:'
-                log_str += ''.join([f' m{i}={self.scores[i, fold_i]:.5f}' for i in range(len(eval_metric))])
+                log_str += ''.join([f' m{i}={self.scores[i, fold_i]:.{round_float}f}' for i in range(len(eval_metric))])
                 log_str += f' (iter {model.get_best_iteration()})'
                 print(log_str)
 
         log_str = f'[CV] Overall:'
         log_str += ''.join(
-            [f' m{i}={me:.5f}±{se:.5f}' for i, (me, se) in enumerate(zip(
+            [f' m{i}={me:.{round_float}f}±{se:.{round_float}f}' for i, (me, se) in enumerate(zip(
                 np.mean(self.scores, axis=1), 
                 np.std(self.scores, axis=1)/np.sqrt(len(eval_metric))
             ))]
@@ -396,18 +433,12 @@ class InfoldTargetEncoder:
             self.encoder = encoder
         self.cat_idx = categorical_features
 
-    def __call__(self, Xs, ys, X_test=None):
-        assert len(Xs) == len(ys)
-            
-        self.encoder.fit(Xs[0][:, self.cat_idx], ys[0])
-        for i in range(len(Xs)):
-            Xs[i][:, self.cat_idx] = self.encoder.transform(
-                Xs[i][:, self.cat_idx])
-        if X_test is not None:
-            X_test[:, self.cat_idx] = self.encoder.transform(
-                X_test[:, self.cat_idx])
-        
-        return (*Xs, *ys, X_test)
+    def __call__(self, Xs, ys):
+        self.encoder.fit(Xs['train'][:, self.cat_idx], ys['train'])
+        for key in Xs.keys():
+            if Xs[key] is None:
+                continue
+            Xs[key][:, self.cat_idx] = self.encoder.transform(Xs[key][:, self.cat_idx])
 
 
 '''

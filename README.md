@@ -14,49 +14,40 @@
 
 # 中身
 ```
-┣ common.py             - 様々な細かい便利ツール
-
-┣ visualization.py
-    ┣ KS_test           - Kolmogorov-Smirnov検定
-    ┣ explore_dataframe - 最低限の自動EDAをする奴
-
-┣ preprocessing.py
-    ┣ CatEncoder        - カテゴリカル変数をいろいろな方法でエンコードする奴
-    ┣ DistTransformer   - データの分布を変換する奴
-    ┣ MICE              - NAフラグ入りのMICEを行う奴
-
-┣ training.py
-    ┣ Trainer           - sklearn APIモデルを学習しやすくするためのラッパー
-                          Permutationやnull importanceの計算も可能
-    ┣ CrossValidator    - CVをシュッと行い、結果のセーブやロードも可能
-    ┣ InfoldTargetEncoder   - fold内でtarget encodingを行う
-    ┣ AdversarialValidationInspector    - Adversarial validationを使った特徴量選択
-    ┣ StratifiedGroupKFold  - 層別化したGroupKFold
-
-┣ metrics.py            - 各種ライブラリ用のmetric
-    ┣ SeUnderSp         - 特異度固定時の感度を最大する目的関数
+┣ common
+┣ visualization
+    ┣ KS_test                   - Kolmogorov-Smirnov検定。
+    ┣ explore_dataframe         - 最低限のEDAを自動化するはず(あまり期待しないこと)。
+┣ preprocessing
+    ┣ CatEncoder                - カテゴリー変数エンコーダー。
+    ┣ DistTransformer           - 連続変数の分布を変形させる。
+    ┣ MICE                      - MICEによる欠損値補完。NaNフラグも入れる。
+┣ training
+    ┣ Trainer                   - sklearn APIモデルの学習ラッパー。Permutation/null importanceの計算も可能。
+    ┣ CrossValidator            - TrainerをラップしてCross Validationを行う。
+    ┣ InfoldTargetEncoder       - CrossValidatorの用のData Transformer。Fold内で変数のencodingを行う。
+    ┣ AdversarialValidationInspector    - Adversarial validationを使った特徴量選択を行う。
+    ┣ StratifiedGroupKFold      - 層別化したGroupKFold。
+┣ metrics                       - 各種ライブラリ用の評価関数。
+    ┣ SeUnderSp                 - 特異度固定時の感度を最大する目的関数。
     ┣ RMSE
     ┣ AUC
     ┣ Accuracy
+┣ nn                            - PyTorchのためのツール。
+    ┣ datasets
+        ┣ category2embedding    - カテゴリー変数をembedding層に入れるための前処理を行う。
+        ┣ Numpy2Dataset         - Arrayをpytorch datasetに変換する。
+    ┣ logger
+        ┣ Logger                - TensorBoard形式のログを記録する。
+    ┣ models
+        ┣ TabularNet            - テーブルデータをスマートに学習してくれるDNN。
+    ┣ snapshot                  - スナップショットの読み書きを行う。
+    ┣ training
+        ┣ TorchTrainer          - PyTorchモデルの学習ラッパー。
+        ┣ TrochCV               - テーブルデータをCVしながらTorchTrainerで学習するラッパー。
+        ┣ EarlyStopping         - EarlyStoppingをする。
+    ┣ temperature_scaling.py    - PyTorchモデルのprobability calibrationを行う。
 
-┣ nn                            - PyTorchのための道具たち
-    ┣ datasets.py
-        ┣ category2embedding    - カテゴリカル変数をembedding層に入れるための前処理
-        ┣ Numpy2Dataset         - ndarrayをpytorch datasetに変換する
-
-    ┣ logger.py
-        ┣ Logger                - TensorBoard形式のログを記録する奴
-
-    ┣ models.py
-        ┣ TabularNet            - テーブルデータをスマートに学習してくれるDNN
-
-    ┣ snapshot.py
-        ┣ ...                   - スナップショットの読み書き関連
-        
-    ┣ training.py
-        ┣ TorchTrainer          - シュッとNNを訓練する奴
-        ┣ TrochCV               - シュッとテーブルデータのNNをCVする奴
-        ┣ EarlyStopping         - 文字通り
 ```
 
 # Examples
@@ -71,7 +62,7 @@ CAT_FIT_PARAMS = {
 }
 
 model = Trainer(CatBoostClassifier(**CAT_PARAMS))
-    model.train(x_train, y_train, x_valid, y_valid, fit_params=CAT_FIT_PARAMS)
+model.train(x_train, y_train, x_valid, y_valid, fit_params=CAT_FIT_PARAMS)
 ```
 
 ## Cross validate scikit-learn API model
@@ -85,8 +76,8 @@ skf = StratifiedKFold(n_splits=CV, shuffle=True)
 logi_cv = CrossValidator(LogisticRegression(**LOGI_PARAMS), skf)
 logi_cv.run(
     X, y, x_test, 
-    eval_metric=[roc_auc_score, SeUnderSp(sp=0.9)], 
-    pred_method='binary_proba', 
+    eval_metric=[AUC(), SeUnderSp(sp=0.9)], 
+    pred_method='binary_proba_positive', 
     transform=InfoldTargetEncoder(),
     importance_method='permutation',
     verbose=0
@@ -110,10 +101,11 @@ skf = StratifiedKFold(n_splits=CV, shuffle=True)
 lgb_cv = CrossValidator(LGBMClassifier(**LGB_PARAMS), skf)
 lgb_cv.run(
     X, y, x_test, 
-    eval_metric=[roc_auc_score, SeUnderSp(sp=0.9)],
+    eval_metric=[AUC(), SeUnderSp(sp=0.9)],
     pred_method='binary_proba', 
-    train_params={'cat_features': CAT_IDXS, 'fit_params': LGB_FIT_PARAMS},
-    verbose=0, transform=None
+    cat_features=CAT_IDXS, 
+    fit_params=LGB_FIT_PARAMS,
+    verbose=0
 )
 lgb_cv.plot_feature_importances()
 ```
