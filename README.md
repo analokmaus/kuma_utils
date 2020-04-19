@@ -16,8 +16,9 @@
 ```
 ┣ common
 ┣ visualization
-    ┣ KS_test                   - Kolmogorov-Smirnov検定。
+    ┣ ks_test                   - Kolmogorov-Smirnov検定。
     ┣ explore_dataframe         - 最低限のEDAを自動化するはず(あまり期待しないこと)。
+    ┣ plot_calibration_curve    _ Clibrationカーブを出力する。
 ┣ preprocessing
     ┣ CatEncoder                - カテゴリー変数エンコーダー。
     ┣ DistTransformer           - 連続変数の分布を変形させる。

@@ -16,16 +16,18 @@ import pandas as pd
 
 import matplotlib.pyplot as plt
 from matplotlib_venn import venn2
-try:
-    import japanize_matplotlib
-except:
-    print('japanize_matplotlib not found.')
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import seaborn as sns
 from scipy.stats import ks_2samp
+from sklearn.calibration import calibration_curve
 
 from .preprocessing import SingleCatEncoder, CatEncoder
 from .common import KumaNumpy as kn
 
+try:
+    import japanize_matplotlib
+except:
+    print('japanize_matplotlib not found.')
 
 '''
 Misc.
@@ -42,7 +44,8 @@ def is_categorical(x, count=10):
 Visualization
 '''
 
-def KS_test(train, test, plot_rejected=False, plot_accepted=False, thres=0.05):
+
+def ks_test(train, test, plot_rejected=False, plot_accepted=False, thres=0.05):
     '''
     Kolmogorov-Smirnov test
     '''
@@ -171,3 +174,26 @@ def plot_correlation(df):
     size_xy = int(len(df.columns)/3)
     plt.figure(figsize=(size_xy, size_xy))
     return sns.heatmap(df.corr())
+
+
+def plot_calibration_curve(target, approx, 
+                           plot_params={
+                               'figsize':(4, 6), 
+                               'tight_layout': True
+                           }):
+    fig = plt.figure(**plot_params)
+    gs = fig.add_gridspec(3, 1)
+    ax1 = fig.add_subplot(gs[0:2, 0])
+    ax2 = fig.add_subplot(gs[2, 0])
+    fraction_of_positives, mean_predicted_value = \
+        calibration_curve(target, approx, n_bins=10)
+    ax1.plot([0, 1], [0, 1], color='gray')
+    ax1.plot(mean_predicted_value, fraction_of_positives, "s-")
+    ax1.set_xlabel('Fraction of positives')
+    ax1.set_ylabel('Mean of prediction values')
+    ax1.grid()
+    ax1.set_xlim([0.0, 1.0])
+    sns.distplot(approx, bins=10, ax=ax2)
+    ax2.set_xlim([0.0, 1.0])
+    ax2.set_ylabel('Count')
+    return fig

@@ -16,17 +16,61 @@ from sklearn.metrics import roc_auc_score, confusion_matrix, mean_squared_error
 from .preprocessing import DistTransformer
 
 
-class SeUnderSp(object):
+class MetricTemplate:
     '''
-    Maximize sensitivity under specific specificity threshold
+    Custom metric template
 
     # Usage
-    - general
-    SeUnderSp(0.9).test(target, pred)
-    - catboost
-    ..., eval_metric=SeUnderSp(0.9), ...
-    - lightgbm
-    ..., eval_metric=SeUnderSp(0.9).lgbm, ...
+    general:    Metric()(target, approx)
+    catboost:   eval_metric=Metric()
+    lightgbm:   eval_metric=Metric().lgbm
+    pytorch:    Metric().torch(output, labels)
+    '''
+
+    def __init__(self, maximize=False):
+        self.maximize = maximize
+
+    def _test(self, target, approx):
+        # Metric calculation
+        pass
+
+    def __call__(self, target, approx):
+        return self._test(target, approx)
+
+    ### CatBoost
+    def get_final_error(self, error, weight):
+        return error / weight
+
+    def is_max_optimal(self):
+        return self.maximize
+
+    def evaluate(self, approxes, target, weight=None):
+        # approxes - list of list-like objects (one object per approx dimension)
+        # target - list-like object
+        # weight - list-like object, can be None
+        assert len(approxes[0]) == len(target)
+        if not isinstance(target, np.ndarray):
+            target = np.array(target)
+
+        approx = np.array(approxes[0])
+        error_sum = self._test(target, approx)
+        weight_sum = 1.0
+
+        return error_sum, weight_sum
+    
+    ### LightGBM
+    def lgbm(self, target, approx):
+        return self.__class__.__name__, self._test(target, approx), self.maximize
+
+    ### PyTorch
+    def torch(self, approx, target):
+        return self._test(target.detach().cpu().numpy(),
+                          approx.detach().cpu().numpy())
+
+
+class SeUnderSp(MetricTemplate):
+    '''
+    Maximize sensitivity under specific specificity threshold
     '''
     def __init__(self, sp=0.9, maximize=True):
         self.sp = 0.9
@@ -38,7 +82,7 @@ class SeUnderSp(object):
 
         return p_tn[int(len(p_tn) * self.sp)]
 
-    def _get_se_sp(self, target, approx):
+    def _test(self, target, approx):
         if not isinstance(target, np.ndarray):
             target = np.array(target)
         if not isinstance(approx, np.ndarray):
@@ -62,111 +106,18 @@ class SeUnderSp(object):
         se = tp / (tp + fn)
         sp = tn / (tn + fp)
 
-        return thres, se, sp
-
-    def __call__(self, target, approx):
-        if not self.maximize:
-            return 1 - self._get_se_sp(target, approx)[1]
-        else:
-            return self._get_se_sp(target, approx)[1]
-
-    '''
-    CatBoost
-    '''
-    def get_final_error(self, error, weight):
-        return error / weight
-
-    def is_max_optimal(self):
-        return self.maximize
-
-    def evaluate(self, approxes, target, weight=None):
-        # approxes - list of list-like objects (one object per approx dimension)
-        # target - list-like object
-        # weight - list-like object, can be None
-        assert len(approxes[0]) == len(target)
-        if not isinstance(target, np.ndarray):
-            target = np.array(target)
-
-        approx = np.array([v for v in approxes[0]])
-        thres, se, sp = self._get_se_sp(target, approx)
-        
-        error_sum = se if self.maximize else 1 - se
-        weight_sum = 1.0
-
-        return error_sum, weight_sum
-
-    '''
-    Lightgbm
-    '''
-    def lgbm(self, target, approx):
-        se = self._get_se_sp(target, approx)[1]
-        if self.maximize:
-            return 'se', se, self.maximize
-        else:
-            return '1-se', 1-se, self.maximize
-
-    '''
-    PyTorch
-    '''
-    def torch(self, approx, target):
-        _approx = approx.cpu().numpy()
-        _target = target.cpu().numpy()
-        se = self._get_se_sp(_target, _approx)[1]
         return se
 
 
-class RMSE(object):
+class RMSE(MetricTemplate):
     '''
     Root mean square error
     '''
-    def __init__(self, maximize=False):
-        self.maximize = maximize
-
     def _test(self, target, approx):
         return np.sqrt(mean_squared_error(target, approx))
 
-    def __call__(self, target, approx):
-        return self._test(target, approx)
 
-    '''
-    CatBoost
-    '''
-    def get_final_error(self, error, weight):
-        return error / weight
-
-    def is_max_optimal(self):
-        return self.maximize
-
-    def evaluate(self, approxes, target, weight=None):
-        # approxes - list of list-like objects (one object per approx dimension)
-        # target - list-like object
-        # weight - list-like object, can be None
-        assert len(approxes[0]) == len(target)
-        if not isinstance(target, np.ndarray):
-            target = np.array(target)
-
-        approx = np.array([v for v in approxes[0]])
-        error_sum = self._test(target, approx)
-        weight_sum = 1.0
-
-        return error_sum, weight_sum
-
-    '''
-    Lightgbm
-    '''
-    def lgbm(self, target, approx):
-        score = self._test(target, approx)
-        return 'error', score, self.maximize
-    
-    '''
-    Pytorch
-    '''
-    def torch(self, appox, target):
-        return self._test(target.detach().cpu().numpy(),
-                         approx.detach().cpu().numpy())
-
-
-class AUC(object):
+class AUC(MetricTemplate):
     '''
     Area under ROC curve
     '''
@@ -183,20 +134,9 @@ class AUC(object):
         else:
             raise ValueError(f'Invalid approx shape: {approx.shape}')
         return roc_auc_score(target, approx)
-
-    def __call__(self, target, approx):
-        return self._test(target, approx)
-    
-    '''
-    Pytorch
-    '''
-    def torch(self, approx, target):
-        return self._test(target.detach().cpu().numpy(), 
-                          approx.detach().cpu().numpy())
-       
         
 
-class Accuracy(object):
+class Accuracy(MetricTemplate):
     '''
     Accuracy
     '''
@@ -212,13 +152,3 @@ class Accuracy(object):
         elif approx.shape[1] >= 2:
             approx = np.argmax(approx, axis=1)
         return np.mean((target == approx).astype(int))
-
-    def __call__(self, target, approx):
-        return self._test(target, approx)
-
-    '''
-    Pytorch
-    '''
-    def torch(self, approx, target):
-        return self._test(target.detach().cpu().numpy(), 
-                          approx.detach().cpu().numpy())
