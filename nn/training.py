@@ -50,12 +50,12 @@ def set_requires_grad(model, requires_grad=True, verbose=True):
 Stopper
 
 # Methods
-__call__() : bool     = return whether score is updated
-stop() : bool         = return whether to stop training or not
-state() : int, int    = return current / total
-score() : float       = return best score
-freeze()              = update score but never stop
-unfreeze()            = unset freeze()
+__call__(score) : bool  = return whether score is improved
+stop() : bool           = return whether to stop training or not
+state() : int, int      = return current / total
+score() : float         = return best score
+freeze()                = update score but never stop
+unfreeze()              = unset freeze()
 '''
 
 class DummyStopper:
@@ -77,7 +77,7 @@ class DummyStopper:
         return 0.0
 
 
-class EarlyStopping:
+class EarlyStopping(DummyStopper):
     '''
     Early stops the training if validation loss doesn't improve after a given patience.
     patience: int   = early stopping rounds
@@ -153,12 +153,13 @@ class TorchTrainer:
 
     # Usage
     model = Net()
+    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=5e-3)
     NN_FIT_PARAMS = {
         'loader': loader_train,
         'loader_valid': loader_valid,
         'loader_test': loader_test,
         'criterion': nn.BCEWithLogitsLoss(),
-        'optimizer': optim.Adam(model.parameters(), lr=1e-3, weight_decay=5e-3),
+        'optimizer': optimizer,
         'scheduler': StepLR(optimizer, step_size=10, gamma=0.9),
         'num_epochs': 100, 
         'stopper': EarlyStopping(patience=20, maximize=True),
@@ -441,7 +442,7 @@ class TorchTrainer:
                         'metric': metric_valid,
                     })
 
-            # Stooped by overfit detector
+            # Stopped by overfit detector
             if self.stopper.stop():
                 if verbose:
                     print("[{}] Training stopped by overfit detector. ({}/{})".format(

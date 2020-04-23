@@ -10,6 +10,7 @@ import traceback
 import warnings
 
 import numpy as np
+from numba import jit
 import pandas as pd
 
 from sklearn.metrics import roc_auc_score, confusion_matrix, mean_squared_error
@@ -30,6 +31,7 @@ class MetricTemplate:
     def __init__(self, maximize=False):
         self.maximize = maximize
 
+    @jit
     def _test(self, target, approx):
         # Metric calculation
         pass
@@ -82,6 +84,7 @@ class SeUnderSp(MetricTemplate):
 
         return p_tn[int(len(p_tn) * self.sp)]
 
+    @jit
     def _test(self, target, approx):
         if not isinstance(target, np.ndarray):
             target = np.array(target)
@@ -113,6 +116,7 @@ class RMSE(MetricTemplate):
     '''
     Root mean square error
     '''
+    @jit
     def _test(self, target, approx):
         return np.sqrt(mean_squared_error(target, approx))
 
@@ -124,6 +128,7 @@ class AUC(MetricTemplate):
     def __init__(self, maximize=True):
         self.maximize = maximize
 
+    @jit
     def _test(self, target, approx):
         if len(approx.shape) == 1:
             approx = approx
@@ -144,6 +149,7 @@ class Accuracy(MetricTemplate):
     def __init__(self, maximize=True):
         self.maximize = maximize
 
+    @jit
     def _test(self, target, approx):
         if len(approx.shape) == 1:
             approx = approx
@@ -152,3 +158,38 @@ class Accuracy(MetricTemplate):
         elif approx.shape[1] >= 2:
             approx = np.argmax(approx, axis=1)
         return np.mean((target == approx).astype(int))
+
+
+class QWK(MetricTemplate):
+    '''
+    Quandric Weight Kappa :))
+    '''
+
+    def __init__(self, max_rat, maximize=True):
+        self.max_rat = max_rat
+        self.maximize = maximize
+
+    @jit
+    def __call__(self, target, approx):
+        assert(len(target) == len(approx))
+        target = np.asarray(target, dtype=int)
+        approx = np.asarray(approx, dtype=int)
+
+        hist1 = np.zeros((self.max_rat + 1, ))
+        hist2 = np.zeros((self.max_rat + 1, ))
+
+        o = 0
+        for k in range(target.shape[0]):
+            i, j = target[k], approx[k]
+            hist1[i] += 1
+            hist2[j] += 1
+            o += (i - j) * (i - j)
+
+        e = 0
+        for i in range(self.max_rat + 1):
+            for j in range(self.max_rat + 1):
+                e += hist1[i] * hist2[j] * (i - j) * (i - j)
+
+        e = e / target.shape[0]
+
+        return 1 - o / e
