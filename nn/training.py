@@ -374,10 +374,12 @@ class TorchTrainer:
 
         self.max_epochs = self.current_epoch + num_epochs
 
+        loss_valid, metric_valid = np.inf, -np.inf
+
         for epoch in range(num_epochs):
             self.current_epoch += 1
             start_time = time.time()
-            self.scheduler.step()
+            self.scheduler.step(loss_valid)
 
             ### Event
             # self.model, self.optimizer, self.scheduler, self.stopper, self.criterion, self.eval_metric = \

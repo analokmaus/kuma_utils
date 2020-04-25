@@ -84,7 +84,6 @@ class SeUnderSp(MetricTemplate):
 
         return p_tn[int(len(p_tn) * self.sp)]
 
-    @jit
     def _test(self, target, approx):
         if not isinstance(target, np.ndarray):
             target = np.array(target)
@@ -116,7 +115,6 @@ class RMSE(MetricTemplate):
     '''
     Root mean square error
     '''
-    @jit
     def _test(self, target, approx):
         return np.sqrt(mean_squared_error(target, approx))
 
@@ -128,7 +126,6 @@ class AUC(MetricTemplate):
     def __init__(self, maximize=True):
         self.maximize = maximize
 
-    @jit
     def _test(self, target, approx):
         if len(approx.shape) == 1:
             approx = approx
@@ -149,7 +146,6 @@ class Accuracy(MetricTemplate):
     def __init__(self, maximize=True):
         self.maximize = maximize
 
-    @jit
     def _test(self, target, approx):
         if len(approx.shape) == 1:
             approx = approx
@@ -169,11 +165,16 @@ class QWK(MetricTemplate):
         self.max_rat = max_rat
         self.maximize = maximize
 
-    @jit
-    def __call__(self, target, approx):
+    def _test(self, target, approx):
         assert(len(target) == len(approx))
         target = np.asarray(target, dtype=int)
         approx = np.asarray(approx, dtype=int)
+        if len(approx.shape) == 1:
+            approx = approx
+        elif approx.shape[1] == 1:
+            approx = np.squeeze(approx)
+        elif approx.shape[1] >= 2:
+            approx = np.argmax(approx, axis=1)
 
         hist1 = np.zeros((self.max_rat + 1, ))
         hist2 = np.zeros((self.max_rat + 1, ))
