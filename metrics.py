@@ -175,9 +175,10 @@ class QWK(MetricTemplate):
             approx = np.squeeze(approx)
         elif approx.shape[1] >= 2:
             approx = np.argmax(approx, axis=1)
+        approx = np.clip(approx, 0, self.max_rat+1).round()
 
-        hist1 = np.zeros((self.max_rat + 1, ))
-        hist2 = np.zeros((self.max_rat + 1, ))
+        hist1 = np.zeros((self.max_rat+1, ))
+        hist2 = np.zeros((self.max_rat+1, ))
 
         o = 0
         for k in range(target.shape[0]):

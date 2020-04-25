@@ -379,7 +379,10 @@ class TorchTrainer:
         for epoch in range(num_epochs):
             self.current_epoch += 1
             start_time = time.time()
-            self.scheduler.step(loss_valid)
+            if self.scheduler.__class__.__name__ == 'ReduceLROnPlateau':
+                self.scheduler.step(loss_valid)
+            else:
+                self.scheduler.step()
 
             ### Event
             # self.model, self.optimizer, self.scheduler, self.stopper, self.criterion, self.eval_metric = \
