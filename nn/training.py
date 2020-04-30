@@ -90,7 +90,7 @@ class EarlyStopping(DummyStopper):
         self.log = []
         self.best_score = None
         self.early_stop = False
-        self.val_loss_min = np.Inf
+        self.val_loss_min = np.inf
         if maximize:
             self.coef = 1
         else:
@@ -128,6 +128,9 @@ class EarlyStopping(DummyStopper):
 
     def unfreeze(self):
         self.frozen = False
+
+    def reset(self):
+        self.best_score = None
 
 
 '''
@@ -336,8 +339,8 @@ class TorchTrainer:
         self.scheduler = scheduler
         self.eval_metric = eval_metric
         self.logger = logger
-        self.event = event
-        self.stopper = stopper
+        self.event = deepcopy(event)
+        self.stopper = deepcopy(stopper)
 
         self.current_epoch = 0
         self.log = {
