@@ -16,11 +16,25 @@ from .datasets import *
 from .snapshot import *
 from .logger import *
 from .temperature_scaling import *
+from .fp16util import network_to_half
 
 try:
     from torchsummary import summary
-except:
+except ModuleNotFoundError:
     print('torch summary not found.')
+
+try:
+    import torch_xla
+    import torch_xla.core.xla_model as xm
+except ModuleNotFoundError:
+    print('torch_xla not found.')
+
+try:
+    from apex import amp
+    APEX_FLAG = True
+except ModuleNotFoundError:
+    print('nvidia apex not found.')
+    APEX_FLAG = False
 
 
 '''
@@ -146,6 +160,7 @@ class DummyEvent:
     def __call__(self, **kwargs):
         pass
 
+
 '''
 Trainer
 '''
@@ -178,16 +193,31 @@ class TorchTrainer:
     '''
 
     def __init__(self, 
-                 model, device=None, serial='Trainer'):
+                 model, device=None, serial='Trainer', 
+                 fp16=False, xla=False):
+
         if device is None:
-            device = torch.device(
-                'cuda' if torch.cuda.is_available() else 'cpu')
+            if xla:
+                device = xm.xla_device()
+            else:
+                device = torch.device(
+                    'cuda' if torch.cuda.is_available() else 'cpu')
         
-        self.model = model
         self.device = device
         self.serial = serial
-        self.model.to(self.device)
-        print(f'[{self.serial}] Model is on {self.device}.')
+        self.is_fp16 = fp16 # Automatically use apex if available
+        self.is_xla = xla
+        self.apex_opt_level = 'O1'
+        print(f'[{self.serial}] On {self.device}.')
+
+    def model_to_fp16(self):
+        if APEX_FLAG:
+            self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=self.apex_opt_level)
+            print(f'[{self.serial}] Model, Optimizer -> fp16 (apex)')
+        else:
+            self.model = network_to_half(self.model)
+            print(f'[{self.serial}] Model -> fp16 (simple)')
+        
 
     def train_loop(self, loader, grad_accumulations=1, logger_interval=1):
         loss_total = 0.0
@@ -202,17 +232,25 @@ class TorchTrainer:
             _y = self.model(X)
             y = y.to(self.device)
             loss = self.criterion(_y, y)
-            loss.backward()
+            if self.is_fp16 and APEX_FLAG:
+                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
 
             if batch_i == 0:
                 # Save output dimension in the first run
                 self.out_dim = _y.shape[1:]
 
-            if batches_done % grad_accumulations == 0:
+            if (batches_i + 1) % grad_accumulations == 0:
                 # Accumulates gradient before each step
-                self.optimizer.step()
+                loss = loss / grad_accumulations # normalize loss
+                if self.is_xla:
+                    xm.optimizer_step(self.optimizer, barrier=True)
+                else:
+                    self.optimizer.step()
                 self.optimizer.zero_grad()
-
+                
             if batch_i % logger_interval == 0:
                 metric = self.eval_metric(_y, y)
                 for param_group in self.optimizer.param_groups:
@@ -306,6 +344,8 @@ class TorchTrainer:
                 align = len(str(self.max_epochs))
                 log_str += f'E{self.current_epoch:0{align}d}/{self.max_epochs}'
             elif item == 'earlystopping':
+                if info['data'] == 'Trn':
+                    continue
                 counter, patience = self.stopper.state()
                 best = self.stopper.score()
                 if best is not None:
@@ -314,7 +354,7 @@ class TorchTrainer:
                         log_str += f'*({counter}/{patience})'
             log_str += sep
         if len(log_str) > 0:
-            print(log_str)
+            print(f'[{self.serial}] {log_str}')
 
     def fit(self,
             # Essential
@@ -363,6 +403,9 @@ class TorchTrainer:
             snapshot_path = snapshot_path/'snapshot.pt'
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
 
+        if self.is_fp16:
+            self.model_to_fp16()
+
         if resume:
             load_snapshots_to_model(snapshot_path, self.model, self.optimizer, self.scheduler)
             self.current_epoch = load_epoch(snapshot_path)
@@ -370,14 +413,18 @@ class TorchTrainer:
                 print(
                     f'[{self.serial}] {snapshot_path} is loaded. Continuing from epoch {start_epoch}.')
 
-        if multi_gpu and torch.cuda.device_count() > 1:
-            self.model = torch.nn.DataParallel(self.model)
-            if verbose:
-                print(f'[{self.serial}] {torch.cuda.device_count()} gpus found.')
+        if multi_gpu:
+            if self.is_xla:
+                print(f'[{self.serial}] Multi parallel training for xla devices is WIP.')
+ 
+            if torch.cuda.device_count() > 1:
+                self.model = torch.nn.DataParallel(self.model)
+                if verbose:
+                    print(f'[{self.serial}] {torch.cuda.device_count()} gpus found.')
 
         self.max_epochs = self.current_epoch + num_epochs
-
         loss_valid, metric_valid = np.inf, -np.inf
+        self.model.to(self.device)
 
         for epoch in range(num_epochs):
             self.current_epoch += 1
@@ -388,7 +435,6 @@ class TorchTrainer:
                 self.scheduler.step()
 
             ### Event
-            # self.model, self.optimizer, self.scheduler, self.stopper, self.criterion, self.eval_metric = \
             event(**{'model': self.model, 'optimizer': self.optimizer, 'scheduler': self.scheduler,
                      'stopper': self.stopper, 'criterion': self.criterion, 'eval_metric': self.eval_metric, 
                      'epoch': epoch, 'global_epoch': self.current_epoch, 'log': self.log})
