@@ -34,6 +34,7 @@
     ┣ RMSE
     ┣ AUC
     ┣ Accuracy
+    ┣ QWK
 ┣ nn                            - PyTorchのためのツール。
     ┣ datasets
         ┣ category2embedding    - カテゴリー変数をembedding層に入れるための前処理を行う。

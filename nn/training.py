@@ -208,6 +208,7 @@ class TorchTrainer:
         self.is_fp16 = fp16 # Automatically use apex if available
         self.is_xla = xla
         self.apex_opt_level = 'O1'
+        self.model = model
         print(f'[{self.serial}] On {self.device}.')
 
     def model_to_fp16(self):
@@ -242,7 +243,7 @@ class TorchTrainer:
                 # Save output dimension in the first run
                 self.out_dim = _y.shape[1:]
 
-            if (batches_i + 1) % grad_accumulations == 0:
+            if (batch_i + 1) % grad_accumulations == 0:
                 # Accumulates gradient before each step
                 loss = loss / grad_accumulations # normalize loss
                 if self.is_xla:
