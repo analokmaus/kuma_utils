@@ -222,16 +222,23 @@ class TorchTrainer:
 
     def train_loop(self, loader, grad_accumulations=1, logger_interval=1):
         loss_total = 0.0
-        metric_total = 0.0
+        # metric_total = 0.0
         total_batch = len(loader.dataset) / loader.batch_size
+        approx = []
+        target = []
 
         self.model.train()
         for batch_i, (X, y) in enumerate(loader):
             batches_done = len(loader) * self.current_epoch + batch_i
 
             X = X.to(self.device)
-            _y = self.model(X)
             y = y.to(self.device)
+            _y = self.model(X)
+            if self.is_fp16:
+                _y = _y.float()
+            approx.append(_y.detach())
+            target.append(y.detach())
+
             loss = self.criterion(_y, y)
             if self.is_fp16 and APEX_FLAG:
                 with amp.scale_loss(loss, self.optimizer) as scaled_loss:
@@ -253,11 +260,11 @@ class TorchTrainer:
                 self.optimizer.zero_grad()
                 
             if batch_i % logger_interval == 0:
-                metric = self.eval_metric(_y, y)
+                # metric = self.eval_metric(_y, y)
                 for param_group in self.optimizer.param_groups:
                     learning_rate = param_group['lr']
                 log_train_batch = [
-                    (f'batch_metric_train[{self.serial}]', metric),
+                    # (f'batch_metric_train[{self.serial}]', metric),
                     (f'batch_loss_train[{self.serial}]', loss.item()),
                     (f'batch_lr_train[{self.serial}]', learning_rate)
                 ]
@@ -265,8 +272,12 @@ class TorchTrainer:
 
             batch_weight = len(X) / loader.batch_size
             loss_total += loss.item() / total_batch * batch_weight
-            metric_total += metric / total_batch * batch_weight
+            # metric_total += metric / total_batch * batch_weight
         
+        approx = torch.cat(approx)
+        target = torch.cat(target)
+        metric_total = self.eval_metric(approx, target)
+
         log_train = [
             (f'epoch_metric_train[{self.serial}]', metric_total),
             (f'epoch_loss_train[{self.serial}]', loss_total)
@@ -279,22 +290,32 @@ class TorchTrainer:
 
     def valid_loop(self, loader, grad_accumulations=1, logger_interval=1):
         loss_total = 0.0
-        metric_total = 0.0
+        # metric_total = 0.0
         total_batch = len(loader.dataset) / loader.batch_size
+        approx = []
+        target = []
 
         self.model.eval()
         with torch.no_grad():
             for X, y in loader:
                 X = X.to(self.device)
-                _y = self.model(X)
                 y = y.to(self.device)
+                _y = self.model(X)
+                if self.is_fp16:
+                    _y = _y.float()
+                approx.append(_y.detach())
+                target.append(y.detach())
+            
                 loss = self.criterion(_y, y)
-                metric= self.eval_metric(_y, y)
+                # metric= self.eval_metric(_y, y)
 
                 batch_weight = len(X) / loader.batch_size
                 loss_total += loss.item() / total_batch * batch_weight
-                metric_total += metric / total_batch * batch_weight
+                # metric_total += metric / total_batch * batch_weight
 
+        approx = torch.cat(approx)
+        target = torch.cat(target)
+        metric_total = self.eval_metric(approx, target)
         log_valid = [
             (f'epoch_metric_valid[{self.serial}]', metric_total),
             (f'epoch_loss_valid[{self.serial}]', loss_total)
