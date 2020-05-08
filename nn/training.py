@@ -213,7 +213,9 @@ class TorchTrainer:
 
     def model_to_fp16(self):
         if APEX_FLAG:
-            self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=self.apex_opt_level)
+            self.model, self.optimizer = amp.initialize(
+                self.model, self.optimizer, 
+                opt_level=self.apex_opt_level, verbosity=0)
             print(f'[{self.serial}] Model, Optimizer -> fp16 (apex)')
         else:
             self.model = network_to_half(self.model)
@@ -425,6 +427,7 @@ class TorchTrainer:
             snapshot_path = snapshot_path/'snapshot.pt'
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
 
+        self.model.to(self.device)
         if self.is_fp16:
             self.model_to_fp16()
 
@@ -446,7 +449,6 @@ class TorchTrainer:
 
         self.max_epochs = self.current_epoch + num_epochs
         loss_valid, metric_valid = np.inf, -np.inf
-        self.model.to(self.device)
 
         for epoch in range(num_epochs):
             self.current_epoch += 1
