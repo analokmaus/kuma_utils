@@ -20,7 +20,10 @@ def get_latest_sanpshot(dir, keyword=None):
     return str(latest_file_path)
 
 
-def save_snapshots(epoch, model, optimizer, scheduler, path):
+def save_snapshots(
+        path, epoch, model, optimizer, scheduler, 
+        stopper=None, event=None):
+
     if isinstance(model, torch.nn.DataParallel):
         module = model.module
     else:
@@ -30,12 +33,19 @@ def save_snapshots(epoch, model, optimizer, scheduler, path):
         'epoch': epoch + 1,
         'model': module.state_dict(),
         'optimizer': optimizer.state_dict(),
-        'scheduler': None if scheduler.__class__.__name__ == 'CyclicLR' else scheduler.state_dict()
+        'scheduler': scheduler.state_dict(),
+        'stopper': stopper,
+        'event': event
     }, path)
 
 
-def load_snapshots_to_model(path, model=None, optimizer=None, scheduler=None):
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+def load_snapshots_to_model(
+        path, model=None, optimizer=None, scheduler=None, 
+        stopper=None, event=None, device=None):
+
+    if device is None:
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
     checkpoint = torch.load(path, map_location=device)
     if model is not None:
         if isinstance(model, torch.nn.DataParallel):
@@ -46,6 +56,10 @@ def load_snapshots_to_model(path, model=None, optimizer=None, scheduler=None):
         optimizer.load_state_dict(checkpoint['optimizer'])
     if scheduler is not None:
         scheduler.load_state_dict(checkpoint['scheduler'])
+    if stopper is not None:
+        stopper = checkpoint['stopper']
+    if event is not None:
+        event = checkpoint['event']
 
 
 def load_pretrained(path, model, ignore=[]):

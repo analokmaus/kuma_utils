@@ -333,18 +333,18 @@ class TorchTrainer:
             print(f'[{self.serial}] No data to predict. Skipping prediction...')
             return None
         batch_size = loader.batch_size
-        prediction = np.zeros(
-            (len(loader.dataset), *self.out_dim), dtype=np.float16)
+        prediction = []
 
         self.model.eval()
         with torch.no_grad():
-            for _epoch in range(test_time_augmentations):
-                for batch_i, (X, _) in enumerate(loader):
-                    X = X.to(self.device)
-                    _y = self.model(X).detach()
-                    _y = _y.cpu().numpy()
-                    idx = slice(batch_i*batch_size, (batch_i+1)*batch_size)
-                    prediction[idx] = _y / test_time_augmentations
+            for batch_i, (X, _) in enumerate(loader):
+                X = X.to(self.device)
+                _y = self.model(X)
+                if self.is_fp16:
+                    _y = _y.float()
+                prediction.append(_y.detach())
+        
+        prediction = torch.cat(prediction).cpu().numpy()
 
         if path is not None:
             np.save(path, prediction)
@@ -430,13 +430,16 @@ class TorchTrainer:
         self.model.to(self.device)
         if self.is_fp16:
             self.model_to_fp16()
-
+        
         if resume:
-            load_snapshots_to_model(snapshot_path, self.model, self.optimizer, self.scheduler)
+            load_snapshots_to_model(
+                snapshot_path, self.model, self.optimizer, self.scheduler, 
+                self.stopper, self.event, device=self.device
+            )
             self.current_epoch = load_epoch(snapshot_path)
             if verbose:
                 print(
-                    f'[{self.serial}] {snapshot_path} is loaded. Continuing from epoch {start_epoch}.')
+                    f'[{self.serial}] {snapshot_path} is loaded. Continuing from epoch {self.current_epoch}.')
 
         if multi_gpu:
             if self.is_xla:
@@ -471,8 +474,9 @@ class TorchTrainer:
                 early_stopping_target = metric_train
 
                 if self.stopper(early_stopping_target):  # score improved
-                    save_snapshots(self.current_epoch,
-                                   self.model, self.optimizer, self.scheduler, snapshot_path)
+                    save_snapshots(snapshot_path, 
+                                   self.current_epoch, self.model, 
+                                   self.optimizer, self.scheduler, self.stopper, self.event)
                 
                 if info_train and epoch % info_interval == 0:
                     self.print_info(info_items, info_seps, {
@@ -510,8 +514,9 @@ class TorchTrainer:
                 
                 early_stopping_target = metric_valid
                 if self.stopper(early_stopping_target):  # score improved
-                    save_snapshots(
-                        self.current_epoch, self.model, self.optimizer, self.scheduler, snapshot_path)
+                    save_snapshots(snapshot_path,
+                                   self.current_epoch, self.model,
+                                   self.optimizer, self.scheduler, self.stopper, self.event)
 
                 if info_valid and epoch % info_interval == 0:
                     self.print_info(info_items, info_seps, {
@@ -626,7 +631,7 @@ class TorchCV:
         self.numpy2dataset = Numpy2Dataset(task)
 
         default_path = snapshot_dir/'default.pt'
-        save_snapshots(0, self.model, fit_params['optimizer'], fit_params['scheduler'], default_path)
+        save_snapshots(default_path, 0, self.model, fit_params['optimizer'], fit_params['scheduler'])
         template = {}
         for item in ['stopper', 'event']:
             if item in fit_params.keys():
