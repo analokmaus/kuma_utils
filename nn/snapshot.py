@@ -34,8 +34,8 @@ def save_snapshots(
         'model': module.state_dict(),
         'optimizer': optimizer.state_dict(),
         'scheduler': scheduler.state_dict(),
-        'stopper': stopper,
-        'event': event
+        'stopper': stopper.dump_state_dict(),
+        'event': event.dump_state_dict()
     }, path)
 
 
@@ -57,9 +57,9 @@ def load_snapshots_to_model(
     if scheduler is not None:
         scheduler.load_state_dict(checkpoint['scheduler'])
     if stopper is not None:
-        stopper = checkpoint['stopper']
+        stopper.load_state_dict(checkpoint['stopper'])
     if event is not None:
-        event = checkpoint['event']
+        event.load_state_dict(checkpoint['event'])
 
 
 def load_pretrained(path, model, ignore=[]):

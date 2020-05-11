@@ -17,6 +17,7 @@ from .snapshot import *
 from .logger import *
 from .temperature_scaling import *
 from .fp16util import network_to_half
+from .sync_batchnorm import convert_model, DataParallelWithCallback
 
 try:
     from torchsummary import summary
@@ -31,6 +32,7 @@ except ModuleNotFoundError:
 
 try:
     from apex import amp
+    from apex.parallel import DistributedDataParallel as DDP
     APEX_FLAG = True
 except ModuleNotFoundError:
     print('nvidia apex not found.')
@@ -90,6 +92,15 @@ class DummyStopper:
     def score(self):
         return 0.0
 
+    def dump_state_dict(self):
+        return {}
+
+    def load_state_dict(self):
+        pass
+
+    def __repr__(self):
+        return 'No Stopper'
+
 
 class EarlyStopping(DummyStopper):
     '''
@@ -146,6 +157,21 @@ class EarlyStopping(DummyStopper):
     def reset(self):
         self.best_score = None
 
+    def dump_state_dict(self):
+        return {
+            'best_score': self.best_score,
+            'counter': self.counter,
+            'patience': self.patience
+        }
+
+    def load_state_dict(self, checkpoint):
+        self.best_score = checkpoint['best_score']
+        self.counter = checkpoint['counter']
+        self.patience = checkpoint['patience']
+
+    def __repr__(self):
+        return f'EarlyStopping({self.patience})'
+
 
 '''
 Event
@@ -159,6 +185,35 @@ class DummyEvent:
 
     def __call__(self, **kwargs):
         pass
+
+    def dump_state_dict(self):
+        return {}
+
+    def load_state_dict(self):
+        pass
+
+    def __repr__(self):
+        return 'No Event'
+
+
+class NoEarlyStoppingNEpochs(DummyEvent):
+
+    def __init__(self, n):
+        self.n = n
+
+    def __call__(self, **kwargs):
+        if kwargs['global_epoch'] == 0:
+            kwargs['stopper'].freeze()
+            kwargs['stopper'].reset()
+            print(f"Epoch\t{kwargs['epoch']}: Earlystopping is frozen.")
+        elif kwargs['global_epoch'] < self.n:
+             kwargs['stopper'].reset()
+        elif kwargs['global_epoch'] == self.n:
+            kwargs['stopper'].unfreeze()
+            print(f"Epoch\t{kwargs['epoch']}: Earlystopping is unfrozen.")
+
+    def __repr__(self):
+        return f'NoEarlyStoppingNEpochs({self.n})'
 
 
 '''
@@ -221,6 +276,24 @@ class TorchTrainer:
             self.model = network_to_half(self.model)
             print(f'[{self.serial}] Model -> fp16 (simple)')
         
+    def model_to_parallel(self):
+        if self.is_xla:
+            print(
+                f'[{self.serial}] Multi parallel training for xla devices is WIP.')
+
+        if torch.cuda.device_count() > 1:
+            all_devices = list(range(torch.cuda.device_count()))
+            if self.is_fp16 and APEX_FLAG:
+                # self.model = DDP(self.model, delay_allreduce=True)
+                # self.model = convert_model(self.model)
+                # self.model = DataParallelWithCallback(self.model, device_ids=all_devices)
+                self.model = nn.parallel.DataParallel(self.model)
+            else:
+                # self.model = convert_model(self.model)
+                # self.model = DataParallelWithCallback(self.model, device_ids=all_devices)
+                self.model = nn.parallel.DataParallel(self.model)
+
+            print(f'[{self.serial}] {torch.cuda.device_count()}({all_devices}) gpus found.')
 
     def train_loop(self, loader, grad_accumulations=1, logger_interval=1):
         loss_total = 0.0
@@ -332,7 +405,6 @@ class TorchTrainer:
         if loader is None:
             print(f'[{self.serial}] No data to predict. Skipping prediction...')
             return None
-        batch_size = loader.batch_size
         prediction = []
 
         self.model.eval()
@@ -427,10 +499,6 @@ class TorchTrainer:
             snapshot_path = snapshot_path/'snapshot.pt'
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self.model.to(self.device)
-        if self.is_fp16:
-            self.model_to_fp16()
-        
         if resume:
             load_snapshots_to_model(
                 snapshot_path, self.model, self.optimizer, self.scheduler, 
@@ -441,14 +509,12 @@ class TorchTrainer:
                 print(
                     f'[{self.serial}] {snapshot_path} is loaded. Continuing from epoch {self.current_epoch}.')
 
+        self.model.to(self.device)
+        if self.is_fp16:
+            self.model_to_fp16()
+        
         if multi_gpu:
-            if self.is_xla:
-                print(f'[{self.serial}] Multi parallel training for xla devices is WIP.')
- 
-            if torch.cuda.device_count() > 1:
-                self.model = torch.nn.DataParallel(self.model)
-                if verbose:
-                    print(f'[{self.serial}] {torch.cuda.device_count()} gpus found.')
+            self.model_to_parallel()
 
         self.max_epochs = self.current_epoch + num_epochs
         loss_valid, metric_valid = np.inf, -np.inf
