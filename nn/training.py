@@ -95,7 +95,7 @@ class DummyStopper:
     def dump_state_dict(self):
         return {}
 
-    def load_state_dict(self):
+    def load_state_dict(self, checkpoint):
         pass
 
     def __repr__(self):
@@ -189,7 +189,7 @@ class DummyEvent:
     def dump_state_dict(self):
         return {}
 
-    def load_state_dict(self):
+    def load_state_dict(self, checkpoint):
         pass
 
     def __repr__(self):
@@ -285,11 +285,9 @@ class TorchTrainer:
             all_devices = list(range(torch.cuda.device_count()))
             if self.is_fp16 and APEX_FLAG:
                 # self.model = DDP(self.model, delay_allreduce=True)
-                # self.model = convert_model(self.model)
                 # self.model = DataParallelWithCallback(self.model, device_ids=all_devices)
                 self.model = nn.parallel.DataParallel(self.model)
             else:
-                # self.model = convert_model(self.model)
                 # self.model = DataParallelWithCallback(self.model, device_ids=all_devices)
                 self.model = nn.parallel.DataParallel(self.model)
 
@@ -303,18 +301,26 @@ class TorchTrainer:
         target = []
 
         self.model.train()
-        for batch_i, (X, y) in enumerate(loader):
+        for batch_i, inputs in enumerate(loader):
             batches_done = len(loader) * self.current_epoch + batch_i
 
+            X, y = inputs[0], inputs[1]
             X = X.to(self.device)
             y = y.to(self.device)
+            if len(inputs) == 3:
+                z = inputs[2]
+                z = z.to(self.device)
+
             _y = self.model(X)
             if self.is_fp16:
                 _y = _y.float()
             approx.append(_y.detach())
             target.append(y.detach())
-
-            loss = self.criterion(_y, y)
+            
+            if len(inputs) == 3:
+                loss = self.criterion(_y, y, z)
+            elif len(inputs) == 2:
+                loss = self.criterion(_y, y)
             if self.is_fp16 and APEX_FLAG:
                 with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                     scaled_loss.backward()
@@ -365,28 +371,33 @@ class TorchTrainer:
 
     def valid_loop(self, loader, grad_accumulations=1, logger_interval=1):
         loss_total = 0.0
-        # metric_total = 0.0
         total_batch = len(loader.dataset) / loader.batch_size
         approx = []
         target = []
 
         self.model.eval()
         with torch.no_grad():
-            for X, y in loader:
+            for inputs in loader:
+                X, y = inputs[0], inputs[1]
                 X = X.to(self.device)
                 y = y.to(self.device)
+                if len(inputs) == 3:
+                    z = inputs[2]
+                    z = z.to(self.device)
+              
                 _y = self.model(X)
                 if self.is_fp16:
                     _y = _y.float()
                 approx.append(_y.detach())
                 target.append(y.detach())
             
-                loss = self.criterion(_y, y)
-                # metric= self.eval_metric(_y, y)
+                if len(inputs) == 3:
+                    loss = self.criterion(_y, y, z)
+                elif len(inputs) == 2:
+                    loss = self.criterion(_y, y)
 
                 batch_weight = len(X) / loader.batch_size
                 loss_total += loss.item() / total_batch * batch_weight
-                # metric_total += metric / total_batch * batch_weight
 
         approx = torch.cat(approx)
         target = torch.cat(target)
@@ -409,7 +420,8 @@ class TorchTrainer:
 
         self.model.eval()
         with torch.no_grad():
-            for batch_i, (X, _) in enumerate(loader):
+            for batch_i, inputs in enumerate(loader):
+                X = inputs[0]
                 X = X.to(self.device)
                 _y = self.model(X)
                 if self.is_fp16:
@@ -499,20 +511,17 @@ class TorchTrainer:
             snapshot_path = snapshot_path/'snapshot.pt'
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
 
+        self.model.to(self.device)
         if resume:
             load_snapshots_to_model(
                 snapshot_path, self.model, self.optimizer, self.scheduler, 
-                self.stopper, self.event, device=self.device
-            )
+                self.stopper, self.event, device=self.device)
             self.current_epoch = load_epoch(snapshot_path)
             if verbose:
                 print(
                     f'[{self.serial}] {snapshot_path} is loaded. Continuing from epoch {self.current_epoch}.')
-
-        self.model.to(self.device)
         if self.is_fp16:
             self.model_to_fp16()
-        
         if multi_gpu:
             self.model_to_parallel()
 
