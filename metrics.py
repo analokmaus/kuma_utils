@@ -31,6 +31,9 @@ class MetricTemplate:
     def __init__(self, maximize=False):
         self.maximize = maximize
 
+    def __repr__(self):
+        return f'{type(self).__name__}(maximize={self.maximize})'
+
     @jit
     def _test(self, target, approx):
         # Metric calculation

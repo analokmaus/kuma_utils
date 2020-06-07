@@ -34,8 +34,8 @@ def save_snapshots(
         'model': module.state_dict(),
         'optimizer': optimizer.state_dict(),
         'scheduler': scheduler.state_dict(),
-        'stopper': stopper.dump_state_dict(),
-        'event': event.dump_state_dict()
+        'stopper': stopper.dump_state_dict() if stopper is not None else None,
+        'event': event.dump_state_dict() if event is not None else None
     }, path)
 
 

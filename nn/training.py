@@ -161,13 +161,11 @@ class EarlyStopping(DummyStopper):
         return {
             'best_score': self.best_score,
             'counter': self.counter,
-            'patience': self.patience
         }
 
     def load_state_dict(self, checkpoint):
         self.best_score = checkpoint['best_score']
         self.counter = checkpoint['counter']
-        self.patience = checkpoint['patience']
 
     def __repr__(self):
         return f'EarlyStopping({self.patience})'
@@ -358,6 +356,9 @@ class TorchTrainer:
         approx = torch.cat(approx)
         target = torch.cat(target)
         metric_total = self.eval_metric(approx, target)
+        log_metrics_total = []
+        for log_metric in self.log_metrics:
+            log_metrics_total.append(log_metric(approx, target))
 
         log_train = [
             (f'epoch_metric_train[{self.serial}]', metric_total),
@@ -367,7 +368,7 @@ class TorchTrainer:
         self.log['train']['loss'].append(loss_total)
         self.log['train']['metric'].append(metric_total)
         
-        return loss_total, metric_total
+        return loss_total, metric_total, log_metrics_total
 
     def valid_loop(self, loader, grad_accumulations=1, logger_interval=1):
         loss_total = 0.0
@@ -402,6 +403,10 @@ class TorchTrainer:
         approx = torch.cat(approx)
         target = torch.cat(target)
         metric_total = self.eval_metric(approx, target)
+        log_metrics_total = []
+        for log_metric in self.log_metrics:
+            log_metrics_total.append(log_metric(approx, target))
+
         log_valid = [
             (f'epoch_metric_valid[{self.serial}]', metric_total),
             (f'epoch_loss_valid[{self.serial}]', loss_total)
@@ -410,7 +415,7 @@ class TorchTrainer:
         self.log['valid']['loss'].append(loss_total)
         self.log['valid']['metric'].append(metric_total)
 
-        return loss_total, metric_total
+        return loss_total, metric_total, log_metrics_total
 
     def predict(self, loader, path=None, test_time_augmentations=1, verbose=True):
         if loader is None:
@@ -448,6 +453,12 @@ class TorchTrainer:
                 log_str += info[item]
             elif item in ['loss', 'metric']:
                 log_str += f'{item}={info[item]:.{self.round_float}f}'
+            elif item  == 'logmetrics':
+                if len(info[item]) > 0:
+                    for im, m in enumerate(info[item]): # list
+                        log_str += f'{item}{im}={m:.{self.round_float}f}'
+                        if im != len(info[item]) - 1:
+                            log_str += ' '
             elif item == 'epoch':
                 align = len(str(self.max_epochs))
                 log_str += f'E{self.current_epoch:0{align}d}/{self.max_epochs}'
@@ -470,13 +481,13 @@ class TorchTrainer:
             loader, num_epochs, loader_valid=None, loader_test=None,
             snapshot_path=None, resume=False,  # Snapshot
             multi_gpu=True, grad_accumulations=1, calibrate_model=False, # Train
-            eval_metric=None, eval_interval=1,  # Evaluation
+            eval_metric=None, eval_interval=1, log_metrics=[], # Evaluation
             test_time_augmentations=1, predict_valid=True, predict_test=True,  # Prediction
             event=DummyEvent(), stopper=DummyStopper(),  # Train add-ons
             # Logger and info
             logger=DummyLogger(''), logger_interval=1, 
             info_train=True, info_valid=True, info_interval=1, round_float=6,
-            info_format='epoch time data loss metric earlystopping', verbose=True):
+            info_format='epoch time data loss metric logmetrics earlystopping', verbose=True):
 
         if eval_metric is None:
             eval_metric = lambda x, y: -1 * criterion(x, y).item()
@@ -486,6 +497,7 @@ class TorchTrainer:
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.eval_metric = eval_metric
+        self.log_metrics = log_metrics
         self.logger = logger
         self.event = deepcopy(event)
         self.stopper = deepcopy(stopper)
@@ -510,6 +522,9 @@ class TorchTrainer:
             self.root_path = snapshot_path
             snapshot_path = snapshot_path/'snapshot.pt'
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not isinstance(self.log_metrics, (list, tuple, set)):
+            self.log_metrics = [self.log_metrics]
 
         self.model.to(self.device)
         if resume:
@@ -542,7 +557,7 @@ class TorchTrainer:
                      'epoch': epoch, 'global_epoch': self.current_epoch, 'log': self.log})
 
             ### Training
-            loss_train, metric_train = self.train_loop(loader, grad_accumulations, logger_interval)
+            loss_train, metric_train, log_metrics_train = self.train_loop(loader, grad_accumulations, logger_interval)
 
             ### No validation set
             if loader_valid is None:
@@ -557,7 +572,8 @@ class TorchTrainer:
                     self.print_info(info_items, info_seps, {
                         'data': 'Trn',
                         'loss': loss_train,
-                        'metric': metric_train,
+                        'metric': metric_train, 
+                        'logmetrics': log_metrics_train
                     })
 
                 if self.stopper.stop():
@@ -581,11 +597,12 @@ class TorchTrainer:
                     'data': 'Trn',
                     'loss': loss_train,
                     'metric': metric_train,
+                    'logmetrics': log_metrics_train
                 })
 
             ### Validation
             if epoch % eval_interval == 0:
-                loss_valid, metric_valid = self.valid_loop(loader_valid, grad_accumulations, logger_interval)
+                loss_valid, metric_valid, log_metrics_valid = self.valid_loop(loader_valid, grad_accumulations, logger_interval)
                 
                 early_stopping_target = metric_valid
                 if self.stopper(early_stopping_target):  # score improved
@@ -598,6 +615,7 @@ class TorchTrainer:
                         'data': 'Val',
                         'loss': loss_valid,
                         'metric': metric_valid,
+                        'logmetrics': log_metrics_valid
                     })
 
             # Stopped by overfit detector
