@@ -17,7 +17,6 @@ from .snapshot import *
 from .logger import *
 from .temperature_scaling import *
 from .fp16util import network_to_half
-from .sync_batchnorm import convert_model, DataParallelWithCallback
 
 try:
     from torchsummary import summary
@@ -37,29 +36,6 @@ try:
 except ModuleNotFoundError:
     print('nvidia apex not found.')
     APEX_FLAG = False
-
-
-'''
-Misc.
-'''
-
-def scan_requires_grad(model):
-    frozen = 0
-    unfrozen = 0
-    for i, param in enumerate(model.parameters()):
-        if param.requires_grad:
-            unfrozen += 1
-        else:
-            frozen += 1
-    return frozen, unfrozen
-
-
-def set_requires_grad(model, requires_grad=True, verbose=True):
-    for i, param in enumerate(model.parameters()):
-        param.requires_grad = requires_grad
-    if verbose:
-        frozen, unfrozen = scan_requires_grad(model)
-        print(f'{frozen}/{frozen+unfrozen} params is frozen.')
         
 
 '''
@@ -282,11 +258,8 @@ class TorchTrainer:
         if torch.cuda.device_count() > 1:
             all_devices = list(range(torch.cuda.device_count()))
             if self.is_fp16 and APEX_FLAG:
-                # self.model = DDP(self.model, delay_allreduce=True)
-                # self.model = DataParallelWithCallback(self.model, device_ids=all_devices)
                 self.model = nn.parallel.DataParallel(self.model)
             else:
-                # self.model = DataParallelWithCallback(self.model, device_ids=all_devices)
                 self.model = nn.parallel.DataParallel(self.model)
 
             print(f'[{self.serial}] {torch.cuda.device_count()}({all_devices}) gpus found.')
@@ -312,8 +285,8 @@ class TorchTrainer:
             _y = self.model(X)
             if self.is_fp16:
                 _y = _y.float()
-            approx.append(_y.detach())
-            target.append(y.detach())
+            approx.append(_y.clone())
+            target.append(y.clone())
             
             if len(inputs) == 3:
                 loss = self.criterion(_y, y, z)
@@ -353,8 +326,8 @@ class TorchTrainer:
             loss_total += loss.item() / total_batch * batch_weight
             # metric_total += metric / total_batch * batch_weight
         
-        approx = torch.cat(approx)
-        target = torch.cat(target)
+        approx = torch.cat(approx).cpu()
+        target = torch.cat(target).cpu()
         metric_total = self.eval_metric(approx, target)
         log_metrics_total = []
         for log_metric in self.log_metrics:
@@ -389,8 +362,8 @@ class TorchTrainer:
                 _y = self.model(X)
                 if self.is_fp16:
                     _y = _y.float()
-                approx.append(_y.detach())
-                target.append(y.detach())
+                approx.append(_y.clone())
+                target.append(y.clone())
             
                 if len(inputs) == 3:
                     loss = self.criterion(_y, y, z)
@@ -400,8 +373,8 @@ class TorchTrainer:
                 batch_weight = len(X) / loader.batch_size
                 loss_total += loss.item() / total_batch * batch_weight
 
-        approx = torch.cat(approx)
-        target = torch.cat(target)
+        approx = torch.cat(approx).cpu()
+        target = torch.cat(target).cpu()
         metric_total = self.eval_metric(approx, target)
         log_metrics_total = []
         for log_metric in self.log_metrics:

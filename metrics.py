@@ -150,12 +150,16 @@ class Accuracy(MetricTemplate):
         self.maximize = maximize
 
     def _test(self, target, approx):
+        assert(len(target) == len(approx))
+        target = np.asarray(target, dtype=int)
+        approx = np.asarray(approx, dtype=float)
         if len(approx.shape) == 1:
             approx = approx
         elif approx.shape[1] == 1:
             approx = np.squeeze(approx)
         elif approx.shape[1] >= 2:
             approx = np.argmax(approx, axis=1)
+        approx = approx.round().astype(int)
         return np.mean((target == approx).astype(int))
 
 
@@ -171,14 +175,14 @@ class QWK(MetricTemplate):
     def _test(self, target, approx):
         assert(len(target) == len(approx))
         target = np.asarray(target, dtype=int)
-        approx = np.asarray(approx, dtype=int)
+        approx = np.asarray(approx, dtype=float)
         if len(approx.shape) == 1:
             approx = approx
         elif approx.shape[1] == 1:
             approx = np.squeeze(approx)
         elif approx.shape[1] >= 2:
             approx = np.argmax(approx, axis=1)
-        approx = np.clip(approx.round(), 0, self.max_rat-1)
+        approx = np.clip(approx.round(), 0, self.max_rat-1).astype(int)
 
         hist1 = np.zeros((self.max_rat+1, ))
         hist2 = np.zeros((self.max_rat+1, ))

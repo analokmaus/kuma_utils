@@ -1,5 +1,4 @@
 '''
-Code is borrowed from
 https://github.com/gpleiss/temperature_scaling
 '''
 import torch
