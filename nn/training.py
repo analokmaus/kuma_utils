@@ -285,8 +285,8 @@ class TorchTrainer:
             _y = self.model(X)
             if self.is_fp16:
                 _y = _y.float()
-            approx.append(_y.clone())
-            target.append(y.clone())
+            approx.append(_y.clone().detach())
+            target.append(y.clone().detach())
             
             if len(inputs) == 3:
                 loss = self.criterion(_y, y, z)
@@ -362,8 +362,8 @@ class TorchTrainer:
                 _y = self.model(X)
                 if self.is_fp16:
                     _y = _y.float()
-                approx.append(_y.clone())
-                target.append(y.clone())
+                approx.append(_y.clone().detach())
+                target.append(y.clone().detach())
             
                 if len(inputs) == 3:
                     loss = self.criterion(_y, y, z)
@@ -474,8 +474,8 @@ class TorchTrainer:
         self.logger = logger
         self.event = deepcopy(event)
         self.stopper = deepcopy(stopper)
-
         self.current_epoch = 0
+
         self.log = {
             'train': {'loss': [], 'metric': []},
             'valid': {'loss': [], 'metric': []}
