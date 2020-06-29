@@ -474,8 +474,8 @@ class TorchTrainer:
         self.logger = logger
         self.event = deepcopy(event)
         self.stopper = deepcopy(stopper)
-
         self.current_epoch = 0
+
         self.log = {
             'train': {'loss': [], 'metric': []},
             'valid': {'loss': [], 'metric': []}
