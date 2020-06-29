@@ -285,8 +285,8 @@ class TorchTrainer:
             _y = self.model(X)
             if self.is_fp16:
                 _y = _y.float()
-            approx.append(_y.clone())
-            target.append(y.clone())
+            approx.append(_y.clone().detach())
+            target.append(y.clone().detach())
             
             if len(inputs) == 3:
                 loss = self.criterion(_y, y, z)
@@ -362,8 +362,8 @@ class TorchTrainer:
                 _y = self.model(X)
                 if self.is_fp16:
                     _y = _y.float()
-                approx.append(_y.clone())
-                target.append(y.clone())
+                approx.append(_y.clone().detach())
+                target.append(y.clone().detach())
             
                 if len(inputs) == 3:
                     loss = self.criterion(_y, y, z)
@@ -554,7 +554,7 @@ class TorchTrainer:
                         print("[{}] Training stopped by overfit detector. ({}/{})".format(
                             self.serial, self.current_epoch-self.stopper.state()[1]+1, self.max_epochs))
                         print(f"[{self.serial}] Best score is {self.stopper.score():.{self.round_float}f}")
-                    load_snapshots_to_model(str(snapshot_path), self.model)
+                    load_snapshots_to_model(str(snapshot_path), self.model, self.optimizer)
                     if predict_valid:
                         self.oof = self.predict(
                             loader, test_time_augmentations=test_time_augmentations, verbose=verbose)
@@ -598,7 +598,7 @@ class TorchTrainer:
                         self.serial, self.current_epoch-self.stopper.state()[1]+1, self.max_epochs))
                     print(
                         f"[{self.serial}] Best score is {self.stopper.score():.{self.round_float}f}")
-                load_snapshots_to_model(str(snapshot_path), self.model)
+                load_snapshots_to_model(str(snapshot_path), self.model, self.optimizer)
 
                 if calibrate_model:
                     if loader_valid is None:
@@ -618,7 +618,7 @@ class TorchTrainer:
             if verbose:
                 print(
                     f"[{self.serial}] Best score is {self.stopper.score():.{self.round_float}f}")
-            load_snapshots_to_model(str(snapshot_path), self.model)
+            load_snapshots_to_model(str(snapshot_path), self.model, self.optimizer)
 
             if calibrate_model:
                 if loader_valid is None:

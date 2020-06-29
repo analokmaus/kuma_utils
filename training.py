@@ -244,8 +244,8 @@ class Trainer:
         else:
             return np.zeros(self.input_shape[1])
 
-    def plot_feature_importances(self, columns=None):
-        imps = self.get_feature_importances(method, verbose=True)
+    def plot_feature_importances(self, columns=None, method='fast'):
+        imps = self.get_feature_importances(method)
 
         if columns is None:
             columns = [f'feature_{i}' for i in range(len(imps))]
