@@ -604,7 +604,7 @@ class TorchTrainer:
                     if loader_valid is None:
                         print('loader_valid is necessary for calibration.')
                     else:
-                        self.calibrate(loader_valid)
+                        self.calibrate_model(loader_valid)
 
                 if predict_valid:
                     self.oof = self.predict(
@@ -624,8 +624,7 @@ class TorchTrainer:
                 if loader_valid is None:
                     print('loader_valid is necessary for calibration.')
                 else:
-                    self.calibrate(loader_valid)
-
+                    self.calibrate_model(loader_valid)
 
             if predict_valid:
                 if loader_valid is None:
@@ -638,13 +637,9 @@ class TorchTrainer:
                 self.pred = self.predict(
                     loader_test, test_time_augmentations=test_time_augmentations, verbose=verbose)
     
-    def calibrate(self, loader, inplace=True):
-        if inplace:
-            self.model = SoftmaxWithTemperature(self.model)
-            self.model.set_temperature(loader)
-        else:
-            self.scaled_model = SoftmaxWithTemperature(self.model)
-            self.scaled_model.set_temperature(loader)
+    def calibrate_model(self, loader):
+        self.model = TemperatureScaler(self.model).to(self.device)
+        self.model.set_temperature(loader)
 
 
 '''
