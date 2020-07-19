@@ -238,6 +238,7 @@ class TorchTrainer:
         self.is_xla = xla
         self.apex_opt_level = 'O1'
         self.model = model
+        self.all_inputs_to_model = False
         print(f'[{self.serial}] On {self.device}.')
 
     def model_to_fp16(self):
@@ -281,8 +282,14 @@ class TorchTrainer:
             if len(inputs) == 3:
                 z = inputs[2]
                 z = z.to(self.device)
-
-            _y = self.model(X)
+            
+            if self.all_inputs_to_model:
+                if len(inputs) == 3:
+                    _y = self.model(X, y, z)
+                elif len(inputs) == 2:
+                    _y = self.model(X, y)
+            else:
+                _y = self.model(X)
             if self.is_fp16:
                 _y = _y.float()
             approx.append(_y.clone().detach())
@@ -328,7 +335,10 @@ class TorchTrainer:
         
         approx = torch.cat(approx).cpu()
         target = torch.cat(target).cpu()
-        metric_total = self.eval_metric(approx, target)
+        if self.eval_metric is None:
+            metric_total = -loss_total
+        else:
+            metric_total = self.eval_metric(approx, target)
         log_metrics_total = []
         for log_metric in self.log_metrics:
             log_metrics_total.append(log_metric(approx, target))
@@ -359,7 +369,14 @@ class TorchTrainer:
                     z = inputs[2]
                     z = z.to(self.device)
               
-                _y = self.model(X)
+                if self.all_inputs_to_model:
+                    if len(inputs) == 3:
+                        _y = self.model(X, y, z)
+                    elif len(inputs) == 2:
+                        _y = self.model(X, y)
+                else:
+                    _y = self.model(X)
+                
                 if self.is_fp16:
                     _y = _y.float()
                 approx.append(_y.clone().detach())
@@ -375,7 +392,10 @@ class TorchTrainer:
 
         approx = torch.cat(approx).cpu()
         target = torch.cat(target).cpu()
-        metric_total = self.eval_metric(approx, target)
+        if self.eval_metric is None:
+            metric_total = -loss_total
+        else:
+            metric_total = self.eval_metric(approx, target)
         log_metrics_total = []
         for log_metric in self.log_metrics:
             log_metrics_total.append(log_metric(approx, target))
@@ -401,9 +421,11 @@ class TorchTrainer:
             for batch_i, inputs in enumerate(loader):
                 X = inputs[0]
                 X = X.to(self.device)
-                _y = self.model(X)
-                if self.is_fp16:
-                    _y = _y.float()
+                if self.is_fp16 and APEX_FLAG:
+                    with amp.disable_casts():
+                        _y = self.model(X)
+                else:
+                    _y = self.model(X)
                 prediction.append(_y.detach())
         
         prediction = torch.cat(prediction).cpu().numpy()
@@ -463,7 +485,6 @@ class TorchTrainer:
             info_format='epoch time data loss metric logmetrics earlystopping', verbose=True):
 
         if eval_metric is None:
-            eval_metric = lambda x, y: -1 * criterion(x, y).item()
             print(f'[{self.serial}] eval_metric is not set. Inversed criterion will be used instead.')
 
         self.criterion = criterion
