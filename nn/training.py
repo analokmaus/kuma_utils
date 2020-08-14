@@ -418,23 +418,30 @@ class TorchTrainer:
 
         self.model.eval()
         with torch.no_grad():
-            for batch_i, inputs in enumerate(loader):
-                X = inputs[0]
-                X = X.to(self.device)
-                if self.is_fp16 and APEX_FLAG:
-                    with amp.disable_casts():
+            for tta_fold in range(test_time_augmentations):
+                fold_prediction = []
+                for batch_i, inputs in enumerate(loader):
+                    X = inputs[0]
+                    X = X.to(self.device)
+                    if self.is_fp16 and APEX_FLAG:
+                        with amp.disable_casts():
+                            _y = self.model(X)
+                    else:
                         _y = self.model(X)
-                else:
-                    _y = self.model(X)
-                prediction.append(_y.detach())
-        
-        prediction = torch.cat(prediction).cpu().numpy()
+                    fold_prediction.append(_y.detach())
+                fold_prediction = torch.cat(fold_prediction).cpu().numpy()
+                prediction.append(fold_prediction)
+
+        if test_time_augmentations > 1:
+            prediction = np.stack(prediction).mean(0)
+        else:
+            prediction = prediction[0]
 
         if path is not None:
             np.save(path, prediction)
 
         if verbose:
-            print(f'[{self.serial}] Prediction done. exported to {path}')
+            print(f'[{self.serial}] Prediction done. (tta = {test_time_augmentations})')
 
         return prediction
 
@@ -578,7 +585,7 @@ class TorchTrainer:
                     load_snapshots_to_model(str(snapshot_path), self.model, self.optimizer)
                     if predict_valid:
                         self.oof = self.predict(
-                            loader, test_time_augmentations=test_time_augmentations, verbose=verbose)
+                            loader, test_time_augmentations=1, verbose=verbose)
                     if predict_test:
                         self.pred = self.predict(
                             loader_test, test_time_augmentations=test_time_augmentations, verbose=verbose)
@@ -629,7 +636,7 @@ class TorchTrainer:
 
                 if predict_valid:
                     self.oof = self.predict(
-                        loader_valid, test_time_augmentations=test_time_augmentations, verbose=verbose)
+                        loader_valid, test_time_augmentations=1, verbose=verbose)
                 if predict_test:
                     self.pred = self.predict(
                         loader_test, test_time_augmentations=test_time_augmentations, verbose=verbose)
@@ -650,10 +657,10 @@ class TorchTrainer:
             if predict_valid:
                 if loader_valid is None:
                     self.oof = self.predict(
-                        loader, test_time_augmentations=test_time_augmentations, verbose=verbose)
+                        loader, test_time_augmentations=1, verbose=verbose)
                 else:
                     self.oof = self.predict(
-                        loader_valid, test_time_augmentations=test_time_augmentations, verbose=verbose)
+                        loader_valid, test_time_augmentations=1, verbose=verbose)
             if predict_test:
                 self.pred = self.predict(
                     loader_test, test_time_augmentations=test_time_augmentations, verbose=verbose)
