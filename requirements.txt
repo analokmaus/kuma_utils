@@ -1,7 +1,7 @@
 catboost==0.12.2
 numba==0.45.0
 numpy==1.16.3
-tensorflow==2.1.0
+tensorflow==2.1.2
 pandas==0.25.0
 scipy==1.4.1
 lightgbm==2.2.3
