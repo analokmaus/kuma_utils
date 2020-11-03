@@ -1,54 +1,58 @@
-# クマさんの道具箱
+# Kuma-san's Toolkit
 
 ```
 　 　 　┼╂┼
 　 　 ∩＿┃＿∩
     |ノ      ヽ
-   /   ●    ● |                 機械学習業務やコンペでちょっと役に立つかもよ
-  |     (_●_) ミ                自分用に作ったので説明は少なめですm(._.)m
+   /   ●    ● |                 I published my toolkit for my own sake.
+  |     (_●_) ミ                Documentations are only in my head.
  彡､     |∪|  ､｀＼
 / ＿＿   ヽノ /´>  )
 (＿＿＿）    / (_／
 ```
 
+# Environment
+`conda env update --file environment.yml`
 
-# 中身
+# Directory
 ```
 ┣ common
 ┣ visualization
-    ┣ ks_test                   - Kolmogorov-Smirnov検定。
-    ┣ explore_dataframe         - 最低限のEDAを自動化するはず(あまり期待しないこと)。
-    ┣ plot_calibration_curve    _ Clibrationカーブを出力する。
+    ┣ ks_test                   - Kolmogorov-Smirnov test.
+    ┣ explore_dataframe         - Automated EDA (WIP).
+    ┣ plot_calibration_curve    - Plot calibation curve.
 ┣ preprocessing
-    ┣ CatEncoder                - カテゴリー変数エンコーダー。
-    ┣ DistTransformer           - 連続変数の分布を変形させる。
-    ┣ MICE                      - MICEによる欠損値補完。NaNフラグも入れる。
+    ┣ CatEncoder                - Category encoder.
+    ┣ DistTransformer           - Distribution transformer.
+    ┣ MICE                      - Multiple imputation by chained equation (w/ NaN flag).
 ┣ training
-    ┣ Trainer                   - sklearn APIモデルの学習ラッパー。Permutation/null importanceの計算も可能。
-    ┣ CrossValidator            - TrainerをラップしてCross Validationを行う。
-    ┣ InfoldTargetEncoder       - CrossValidatorの用のData Transformer。Fold内で変数のencodingを行う。
-    ┣ AdversarialValidationInspector    - Adversarial validationを使った特徴量選択を行う。
-    ┣ StratifiedGroupKFold      - 層別化したGroupKFold。
-┣ metrics                       - 各種ライブラリ用の評価関数。
-    ┣ SeUnderSp                 - 特異度固定時の感度を最大する目的関数。
+    ┣ Trainer                   - Wrapper for scikit-learn API models. See examples below.
+    ┣ CrossValidator            - Simple cross validation wrapper for Trainer.
+    ┣ InfoldTargetEncoder       - Infold target encoder for CrossValidator.
+    ┣ AdversarialValidationInspector    - Simple adversarial validation.
+    ┣ StratifiedGroupKFold      - scikit-learn API stratified group k-fold split.
+┣ metrics                       - Universal metric class for whatever library.
+    ┣ SeUnderSp                 - Sensitivity with specificity fixed.
     ┣ RMSE
     ┣ AUC
     ┣ Accuracy
     ┣ QWK
-┣ nn                            - PyTorchのためのツール。
+┣ nn                            - Tools for pytorch
     ┣ datasets
-        ┣ category2embedding    - カテゴリー変数をembedding層に入れるための前処理を行う。
-        ┣ Numpy2Dataset         - Arrayをpytorch datasetに変換する。
+        ┣ category2embedding    - Calculate optimal embedding dimensions of categorical features.
+        ┣ Numpy2Dataset         - Convert numpy.array to torch.tensor.
     ┣ logger
-        ┣ Logger                - TensorBoard形式のログを記録する。
+        ┣ Logger                - Export TensorBoard logs.
     ┣ models
-        ┣ TabularNet            - テーブルデータをスマートに学習してくれるDNN。
-    ┣ snapshot                  - スナップショットの読み書きを行う。
+        ┣ TabularNet            - Simple DNN for tabular data.
+    ┣ snapshot                  - Snapshot I/O.
     ┣ training
-        ┣ TorchTrainer          - PyTorchモデルの学習ラッパー。
-        ┣ TrochCV               - テーブルデータをCVしながらTorchTrainerで学習するラッパー。
-        ┣ EarlyStopping         - EarlyStoppingをする。
-    ┣ temperature_scaling.py    - PyTorchモデルのprobability calibrationを行う。
+        ┣ TorchTrainer          - PyTorch Wrapper. See examples below.
+        ┣ TrochCV               - Simple cross validation wrapper for TorchTrainer.
+        ┣ DummyStopper          - Dummy stopper for TorchTrainer.
+        ┣ EarlyStopping         - Early stopping for TorchTrainer.
+        ┣ DummyEvent            - Dummy event for TorchTrainer.
+    ┣ temperature_scaling.py    - Probability calibration for pytorch models.
 
 ```
 

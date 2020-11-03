@@ -238,7 +238,8 @@ class TorchTrainer:
         self.is_xla = xla
         self.apex_opt_level = 'O1'
         self.model = model
-        self.all_inputs_to_model = False
+        self.argument_index_to_model = [0]
+        self.argument_index_to_metric = None
         print(f'[{self.serial}] On {self.device}.')
 
     def model_to_fp16(self):
@@ -254,7 +255,7 @@ class TorchTrainer:
     def model_to_parallel(self):
         if self.is_xla:
             print(
-                f'[{self.serial}] Multi parallel training for xla devices is WIP.')
+                f'[{self.serial}] Parallel training for xla devices is WIP.')
 
         if torch.cuda.device_count() > 1:
             all_devices = list(range(torch.cuda.device_count()))
@@ -267,7 +268,6 @@ class TorchTrainer:
 
     def train_loop(self, loader, grad_accumulations=1, logger_interval=1):
         loss_total = 0.0
-        # metric_total = 0.0
         total_batch = len(loader.dataset) / loader.batch_size
         approx = []
         target = []
@@ -277,27 +277,16 @@ class TorchTrainer:
         for batch_i, inputs in enumerate(loader):
             batches_done = len(loader) * self.current_epoch + batch_i
 
-            # inputs = [t.to(self.device) for t in inputs]
-            X, y = inputs[0], inputs[1]
-            X = X.to(self.device)
-            y = y.to(self.device)
-            if len(inputs) == 3:
-                z = inputs[2]
-                z = z.to(self.device)
-            
-            if self.all_inputs_to_model:
-                if len(inputs) == 3:
-                    _y = self.model(X, y, z)
-                elif len(inputs) == 2:
-                    _y = self.model(X, y)
-            else:
-                _y = self.model(X)
+            inputs = [t.to(self.device) for t in inputs]
+            y = inputs[-1] # !: the last input is always target
+            _y = self.model(*[inputs[i] for i in self.argument_index_to_model])
             if self.is_fp16:
                 _y = _y.float()
+            
             approx.append(_y.clone().detach())
             target.append(y.clone().detach())
-            if len(inputs) == 3:
-                others.append(z.clone().detach())
+            if self.argument_index_to_metric is not None:
+                others.append(inputs[self.argument_index_to_metric].clone().detach())
             
             loss = self.criterion(_y, y)
             if self.is_fp16 and APEX_FLAG:
@@ -320,19 +309,16 @@ class TorchTrainer:
                 self.optimizer.zero_grad()
                 
             if batch_i % logger_interval == 0:
-                # metric = self.eval_metric(_y, y)
                 for param_group in self.optimizer.param_groups:
                     learning_rate = param_group['lr']
                 log_train_batch = [
-                    # (f'batch_metric_train[{self.serial}]', metric),
                     (f'batch_loss_train[{self.serial}]', loss.item()),
                     (f'batch_lr_train[{self.serial}]', learning_rate)
                 ]
                 self.logger.list_of_scalars_summary(log_train_batch, batches_done)
 
-            batch_weight = len(X) / loader.batch_size
+            batch_weight = len(y) / loader.batch_size
             loss_total += loss.item() / total_batch * batch_weight
-            # metric_total += metric / total_batch * batch_weight
         
         approx = torch.cat(approx).cpu()
         target = torch.cat(target).cpu()
@@ -372,31 +358,20 @@ class TorchTrainer:
         self.model.eval()
         with torch.no_grad():
             for inputs in loader:
-                X, y = inputs[0], inputs[1]
-                X = X.to(self.device)
-                y = y.to(self.device)
-                if len(inputs) == 3:
-                    z = inputs[2]
-                    z = z.to(self.device)
-              
-                if self.all_inputs_to_model:
-                    if len(inputs) == 3:
-                        _y = self.model(X, y, z)
-                    elif len(inputs) == 2:
-                        _y = self.model(X, y)
-                else:
-                    _y = self.model(X)
-                
+                inputs = [t.to(self.device) for t in inputs]
+                y = inputs[-1] # !: the last input is always target
+                _y = self.model(*[inputs[i] for i in self.argument_index_to_model])
                 if self.is_fp16:
                     _y = _y.float()
+
                 approx.append(_y.clone().detach())
                 target.append(y.clone().detach())
-                if len(inputs) == 3:
-                    others.append(z.clone().detach())
-            
+                if self.argument_index_to_metric is not None:
+                    others.append(inputs[self.argument_index_to_metric].clone().detach())
+
                 loss = self.criterion(_y, y)
 
-                batch_weight = len(X) / loader.batch_size
+                batch_weight = len(y) / loader.batch_size
                 loss_total += loss.item() / total_batch * batch_weight
 
         approx = torch.cat(approx).cpu()
@@ -435,14 +410,14 @@ class TorchTrainer:
 
         self.model.eval()
         with torch.no_grad():
-            for batch_i, inputs in enumerate(loader):
-                X = inputs[0]
-                X = X.to(self.device)
+            for inputs in loader:
+                inputs = [t.to(self.device) for t in inputs]
+                y = inputs[-1]  # !: the last input is always target
                 if self.is_fp16 and APEX_FLAG:
                     with amp.disable_casts():
-                        _y = self.model(X)
+                        _y = self.model(*[inputs[i] for i in self.argument_index_to_model])
                 else:
-                    _y = self.model(X)
+                    _y = self.model(*[inputs[i] for i in self.argument_index_to_model])
                 prediction.append(_y.detach())
         
         prediction = torch.cat(prediction).cpu().numpy()
