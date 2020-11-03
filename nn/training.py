@@ -271,11 +271,13 @@ class TorchTrainer:
         total_batch = len(loader.dataset) / loader.batch_size
         approx = []
         target = []
+        others = []
 
         self.model.train()
         for batch_i, inputs in enumerate(loader):
             batches_done = len(loader) * self.current_epoch + batch_i
 
+            # inputs = [t.to(self.device) for t in inputs]
             X, y = inputs[0], inputs[1]
             X = X.to(self.device)
             y = y.to(self.device)
@@ -294,11 +296,10 @@ class TorchTrainer:
                 _y = _y.float()
             approx.append(_y.clone().detach())
             target.append(y.clone().detach())
-            
             if len(inputs) == 3:
-                loss = self.criterion(_y, y, z)
-            elif len(inputs) == 2:
-                loss = self.criterion(_y, y)
+                others.append(z.clone().detach())
+            
+            loss = self.criterion(_y, y)
             if self.is_fp16 and APEX_FLAG:
                 with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                     scaled_loss.backward()
@@ -335,13 +336,21 @@ class TorchTrainer:
         
         approx = torch.cat(approx).cpu()
         target = torch.cat(target).cpu()
+        if len(others) > 0:
+            others = torch.cat(others).cpu()
         if self.eval_metric is None:
             metric_total = -loss_total
         else:
-            metric_total = self.eval_metric(approx, target)
+            if len(others) > 0:
+                metric_total = self.eval_metric(approx, target, others)
+            else:
+                metric_total = self.eval_metric(approx, target)
         log_metrics_total = []
         for log_metric in self.log_metrics:
-            log_metrics_total.append(log_metric(approx, target))
+            if len(others) > 0:
+                log_metrics_total.append(log_metric(approx, target, others))
+            else:
+                log_metrics_total.append(log_metric(approx, target))
 
         log_train = [
             (f'epoch_metric_train[{self.serial}]', metric_total),
@@ -358,6 +367,7 @@ class TorchTrainer:
         total_batch = len(loader.dataset) / loader.batch_size
         approx = []
         target = []
+        others = []
 
         self.model.eval()
         with torch.no_grad():
@@ -381,24 +391,31 @@ class TorchTrainer:
                     _y = _y.float()
                 approx.append(_y.clone().detach())
                 target.append(y.clone().detach())
-            
                 if len(inputs) == 3:
-                    loss = self.criterion(_y, y, z)
-                elif len(inputs) == 2:
-                    loss = self.criterion(_y, y)
+                    others.append(z.clone().detach())
+            
+                loss = self.criterion(_y, y)
 
                 batch_weight = len(X) / loader.batch_size
                 loss_total += loss.item() / total_batch * batch_weight
 
         approx = torch.cat(approx).cpu()
         target = torch.cat(target).cpu()
+        if len(others) > 0:
+            others = torch.cat(others).cpu()
         if self.eval_metric is None:
             metric_total = -loss_total
         else:
-            metric_total = self.eval_metric(approx, target)
+            if len(others) > 0:
+                metric_total = self.eval_metric(approx, target, others)
+            else:
+                metric_total = self.eval_metric(approx, target)
         log_metrics_total = []
         for log_metric in self.log_metrics:
-            log_metrics_total.append(log_metric(approx, target))
+            if len(others) > 0:
+                log_metrics_total.append(log_metric(approx, target, others))
+            else:
+                log_metrics_total.append(log_metric(approx, target))
 
         log_valid = [
             (f'epoch_metric_valid[{self.serial}]', metric_total),
