@@ -1,0 +1,17 @@
+lightgbm==2.3.0
+matplotlib_venn==0.11.6
+pandas==1.1.3
+tensorflow==2.0.0
+torch==1.7.0
+scipy==1.5.2
+torch_summary==1.4.3
+tqdm==4.50.2
+numpy==1.19.2
+numba==0.51.2
+catboost==0.24.2
+seaborn==0.11.0
+matplotlib==3.3.2
+japanize_matplotlib==1.1.3
+Pillow==8.0.1
+scikit_learn==0.23.2
+torchsummary==1.5.1

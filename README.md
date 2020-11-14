@@ -12,14 +12,14 @@
 ```
 
 # Environment
-`conda env update --file environment.yml`
-## Additional packages (not necessary but recommended)
+`pip install -r reqirements.txt`
+## Optional requirements
 ### xfeat
 `pip install -q https://github.com/pfnet-research/xfeat/archive/master.zip`
 ### Category Encoders
 `pip install category_encoders`
 ### Optuna
-`WIP`
+`pip install optuna`
 ### CuPy
 `WIP`
 ### NVIDIA apex
@@ -29,14 +29,16 @@
 # Directory
 ```
 ┣ common
+┣ compat                        - Old version of kuma_utils for compatibility.
 ┣ visualization
     ┣ ks_test                   - Kolmogorov-Smirnov test.
     ┣ explore_dataframe         - Automated EDA (WIP).
     ┣ plot_calibration_curve    - Plot calibation curve.
 ┣ preprocessing
-    ┣ CatEncoder                - Category encoder.
-    ┣ DistTransformer           - Distribution transformer.
-    ┣ MICE                      - Multiple imputation by chained equation (w/ NaN flag).
+    ┣ xfeat                     - xfeat modifications.
+        ┣ TargetEncoder
+        ┣ Pipeline
+    ┣ DistTransformer           - Distribution transformer for numerical features. 
 ┣ training
     ┣ Trainer                   - Wrapper for scikit-learn API models. See examples below.
     ┣ CrossValidator            - Simple cross validation wrapper for Trainer.
@@ -49,7 +51,7 @@
     ┣ AUC
     ┣ Accuracy
     ┣ QWK
-┣ nn                            - Tools for pytorch
+┣ torch                       
     ┣ datasets
         ┣ category2embedding    - Calculate optimal embedding dimensions of categorical features.
         ┣ Numpy2Dataset         - Convert numpy.array to torch.tensor.
