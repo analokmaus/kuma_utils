@@ -13,6 +13,18 @@
 
 # Environment
 `conda env update --file environment.yml`
+## Additional packages (not necessary but recommended)
+### xfeat
+`pip install -q https://github.com/pfnet-research/xfeat/archive/master.zip`
+### Category Encoders
+`pip install category_encoders`
+### Optuna
+`WIP`
+### CuPy
+`WIP`
+### NVIDIA apex
+`WIP`
+
 
 # Directory
 ```
