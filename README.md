@@ -4,9 +4,9 @@
 　 　 　┼╂┼
 　 　 ∩＿┃＿∩
     |ノ      ヽ
-   /   ●    ● |                 I published my toolkit for my own sake.
-  |     (_●_) ミ                Documentations are only in my head.
- 彡､     |∪|  ､｀＼
+   /   ●    ● |
+  |     (_●_) ミ        < There is absolutely no warranty. >
+ 彡､     |∪|  ､｀＼ 
 / ＿＿   ヽノ /´>  )
 (＿＿＿）    / (_／
 ```
