@@ -56,6 +56,7 @@ class Trainer:
             self.load(path)
         else:
             raise ValueError('either model or path must be given.')
+        self.feature_importance = None
 
     def _data_check(self, data):
         assert isinstance(data, (list, tuple))
@@ -280,8 +281,9 @@ class Trainer:
             
         if normalize:
             imp = vector_normalize(imp)
-
-        return {self.feature_names[i]: imp[i] for i in range(len(self.feature_names))}
+        
+        self.feature_importance = {self.feature_names[i]: imp[i] for i in range(len(self.feature_names))}
+        return self.feature_importance
 
     def plot_feature_importance(self, importance_type='auto', normalize=True, fit_params=None, 
                                 sorted=True, width=5, save_to=None):
@@ -320,9 +322,11 @@ class Trainer:
         with open(path, 'wb') as f:
             pickle.dump(
                 (self.model_type, self.model_name, self.model, 
-                self.is_trained, self.feature_names, self.best_iteration), f)
+                 self.is_trained, self.feature_names, self.best_iteration,
+                 self.feature_importance), f)
 
     def load(self, path):
         with open(path, 'rb') as f:
             self.model_type, self.model_name, self.model, \
-            self.is_trained, self.feature_names, self.best_iteration = pickle.load(f)
+            self.is_trained, self.feature_names, self.best_iteration, \
+            self.feature_importance = pickle.load(f)

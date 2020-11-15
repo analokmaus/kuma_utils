@@ -40,11 +40,9 @@
         ┣ Pipeline
     ┣ DistTransformer           - Distribution transformer for numerical features. 
 ┣ training
-    ┣ Trainer                   - Wrapper for scikit-learn API models. See examples below.
-    ┣ CrossValidator            - Simple cross validation wrapper for Trainer.
-    ┣ InfoldTargetEncoder       - Infold target encoder for CrossValidator.
-    ┣ AdversarialValidationInspector    - Simple adversarial validation.
-    ┣ StratifiedGroupKFold      - scikit-learn API stratified group k-fold split.
+    ┣ Trainer                   - Amazing wrapper for scikit-learn API models.
+    ┣ LGBMLogger                - Logger callback for LightGBM/XGBoost.
+    ┣ StratifiedGroupKFold      - Stratified group k-fold split.
 ┣ metrics                       - Universal metric class for whatever library.
     ┣ SeUnderSp                 - Sensitivity with specificity fixed.
     ┣ RMSE
