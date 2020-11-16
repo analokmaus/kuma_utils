@@ -21,16 +21,49 @@ from .logger import LGBMLogger, XGBLogger
 
 try:
     import optuna
+    import optuna.integration.lightgbm as lgb_tune
 except ModuleNotFoundError:
     print('optuna not found.')
 
 import pickle
+from pathlib import Path
 
 
 MODEL_ZOO = {
     'xgb': ['XGBClassifier', 'XGBRegressor', 'XGBRanker', 'XGBRFRegressor', 'XGBRFClassifier', 'XGBModel'],
     'lgb': ['LGBMClassifier', 'LGBMRegressor', 'LGBMRanker', 'LGBMModel'],
     'cat': ['CatBoost', 'CatBoostClassifier', 'CatBoostRegressor']
+}
+
+
+OPTUNA_ZOO = {
+    'CatBoostClassifier': lambda trial: {
+        "objective": trial.suggest_categorical("objective", ["Logloss", "CrossEntropy"]),
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.01, 0.1),
+        "depth": trial.suggest_int("depth", 1, 12),
+        "boosting_type": trial.suggest_categorical("boosting_type", ["Ordered", "Plain"]),
+        "bootstrap_type": trial.suggest_categorical(
+            "bootstrap_type", ["Bayesian", "Bernoulli", "MVS"]
+        )
+    }, 
+    'CatBoostRegressor': lambda trial: {
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.01, 0.1),
+        "depth": trial.suggest_int("depth", 1, 12),
+        "boosting_type": trial.suggest_categorical("boosting_type", ["Ordered", "Plain"]),
+        "bootstrap_type": trial.suggest_categorical(
+            "bootstrap_type", ["Bayesian", "Bernoulli", "MVS"]
+        )
+    },
+    'XGBClassifier': lambda trial: {
+        "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
+        "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
+        "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
+    }, 
+    'XGBRegressor': lambda trial: {
+        "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
+        "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
+        "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
+    },
 }
 
 
@@ -76,18 +109,19 @@ class Trainer:
               # Probability calibration
               calibration=False, calibration_method='isotonic', calibration_cv=5,
               # Optuna
-              optimize_params=False, 
+              tune_model=False, optuna_params=None, maximize=False, 
+              eval_metric=None, n_trials=None, timeout=None, 
               # Misc
-              log_path=None, n_jobs=-1):
+              logger=None, n_jobs=-1):
 
         self._data_check(train_data)
         self._data_check(valid_data)
-        n_features = train_data[0].shape[1]
-        n_classes = len(np.unique(train_data[1]))
+        self.n_features = train_data[0].shape[1]
+        self.n_classes = len(np.unique(train_data[1]))
         if isinstance(train_data[0], pd.DataFrame):
             self.feature_names = train_data[0].columns.tolist()
         else:
-            self.feature_names = [f'f{i}' for i in range(n_features)]
+            self.feature_names = [f'f{i}' for i in range(self.n_features)]
 
         if self.model_name in MODEL_ZOO['cat']:
             ''' Catboost '''
@@ -107,7 +141,35 @@ class Trainer:
             else:
                 dvalid = dtrain
             
-            self.model = self.model_type(**params)
+            # Optuna integration
+            if tune_model:
+                _fit_params = fit_params.copy()
+                if 'verbose_eval' in _fit_params.keys():
+                    _fit_params['verbose_eval'] = False
+                def cat_objective(trial):
+                    _params = params.copy()
+                    _optuna_params = optuna_params
+                    if _optuna_params is None:
+                        _optuna_params = OPTUNA_ZOO[self.model_name](trial)
+                    _params.update(_optuna_params)
+                    if _params["bootstrap_type"] == "Bayesian":
+                        _params["bagging_temperature"] = \
+                            trial.suggest_float( "bagging_temperature", 0, 10)
+                    elif _params["bootstrap_type"] == "Bernoulli":
+                        _params["subsample"] = trial.suggest_float("subsample", 0.1, 1)
+                    self.model = self.model_type(**_params)
+                    self.model.fit(X=dtrain, eval_set=dvalid, **_fit_params)
+                    score = self.model.best_score_['validation'][params['eval_metric']]
+                    return score
+                study = optuna.create_study(direction='maximize' if maximize else 'minimize')
+                study.optimize(
+                    cat_objective, n_trials=n_trials, timeout=timeout, n_jobs=1)
+                _params = params.copy()
+                _params.update(study.best_trial.params)
+            else:
+                _params = params.copy()
+
+            self.model = self.model_type(**_params)
             self.model.fit(X=dtrain, eval_set=dvalid, **fit_params)
             self.best_iteration = self.model.get_best_iteration()
 
@@ -127,15 +189,34 @@ class Trainer:
             else:
                 dvalid = dtrain
 
-            logger = LGBMLogger(
-                log_path if log_path is not None else '.trainer.log', params, fit_params)
-            callbacks = [logger]
+            # Optuna intergration
+            if tune_model:
+                _fit_params = fit_params.copy()
+                if 'verbose_eval' in _fit_params.keys():
+                    _fit_params['verbose_eval'] = False
+                self.model = lgb_tune.train(
+                    params, train_set=dtrain, valid_sets=[dtrain, dvalid], **_fit_params)
+                # _params = self.model.params.copy()
+                self.best_iteration = self.model.best_iteration
+            else:
+                _params = params.copy()
 
-            self.model = lgb.train(
-                params, train_set=dtrain, valid_sets=[dtrain, dvalid], callbacks=callbacks, **fit_params)
-            self.best_iteration = self.model.best_iteration
+                if isinstance(logger, (str, Path)):
+                    callbacks = [LGBMLogger(logger)]
+                elif isinstance(logger, LGBMLogger):
+                    callbacks = [logger]
+                elif logger is None:
+                    callbacks = None
+                else:
+                    raise ValueError('invalid logger.')
+
+                self.model = lgb.train(
+                    _params, train_set=dtrain, valid_sets=[dtrain, dvalid], callbacks=callbacks, **fit_params)
+                self.best_iteration = self.model.best_iteration
+
             if convert_to_sklearn:
-                self.model = booster2sklearn(self.model, self.model_type, n_features, n_classes)
+                self.model = booster2sklearn(
+                    self.model, self.model_type, self.n_features, self.n_classes)
                 self.model._le = _LGBMLabelEncoder().fit(train_data[1]) # internal label encoder 
 
         elif self.model_name in MODEL_ZOO['xgb']:
@@ -154,16 +235,66 @@ class Trainer:
             else:
                 dvalid = dtrain
 
-            logger = XGBLogger(
-                log_path if log_path is not None else '.trainer.log')
-            callbacks = [logger]
+            # Optuna integration
+            if tune_model:
+                _fit_params = fit_params.copy()
+                if 'verbose_eval' in _fit_params.keys():
+                    _fit_params['verbose_eval'] = False
+                def xgb_objective(trial):
+                    _params = params.copy()
+                    _optuna_params = optuna_params
+                    if _optuna_params is None:
+                        _optuna_params = OPTUNA_ZOO[self.model_name](trial)
+                    _params.update(_optuna_params)
+                    if _params["booster"] == "gbtree" or _params["booster"] == "dart":
+                        _params["max_depth"] = trial.suggest_int("max_depth", 1, 9)
+                        _params["eta"] = trial.suggest_float("eta", 1e-8, 1.0, log=True)
+                        _params["gamma"] = trial.suggest_float("gamma", 1e-8, 1.0, log=True)
+                        _params["grow_policy"] = trial.suggest_categorical(
+                            "grow_policy", ["depthwise", "lossguide"])
+                    if _params["booster"] == "dart":
+                        _params["sample_type"] = trial.suggest_categorical(
+                            "sample_type", ["uniform", "weighted"])
+                        _params["normalize_type"] = trial.suggest_categorical(
+                            "normalize_type", ["tree", "forest"])
+                        _params["rate_drop"] = trial.suggest_float(
+                            "rate_drop", 1e-8, 1.0, log=True)
+                        _params["skip_drop"] = trial.suggest_float(
+                            "skip_drop", 1e-8, 1.0, log=True)
+                    res = {}
+                    self.model = xgb.train(
+                        _params, dtrain=dtrain, 
+                        evals=[(dtrain, 'train'), (dvalid, 'valid')],
+                        evals_result=res, **_fit_params)
+                    if maximize:
+                        score = np.max(res['valid'][_params['eval_metric']])
+                    else:
+                        score = np.min(res['valid'][_params['eval_metric']])
+                    return score
+                study = optuna.create_study(direction='maximize' if maximize else 'minimize')
+                study.optimize(
+                    xgb_objective, n_trials=n_trials, timeout=timeout, n_jobs=1)
+                _params = params.copy()
+                _params.update(study.best_trial.params)
+            else:
+                _params = params.copy()
+
+            if isinstance(logger, (str, Path)):
+                callbacks = [XGBLogger(logger)]
+            elif isinstance(logger, LGBMLogger):
+                callbacks = [logger]
+            elif logger is None:
+                callbacks = None
+            else:
+                raise ValueError('invalid logger.')
 
             self.model = xgb.train(
-                params, dtrain=dtrain, evals=[(dtrain, 'train'), (dvalid, 'valid')], 
+                _params, dtrain=dtrain, evals=[(dtrain, 'train'), (dvalid, 'valid')], 
                 callbacks=callbacks, **fit_params)
             self.best_iteration = self.model.best_iteration
             if convert_to_sklearn:
-                self.model = booster2sklearn(self.model, self.model_type, n_features, n_classes)
+                self.model = booster2sklearn(
+                    self.model, self.model_type, self.n_features, self.n_classes)
 
         else:
             self.model = self.model_type(**params)
@@ -322,11 +453,13 @@ class Trainer:
         with open(path, 'wb') as f:
             pickle.dump(
                 (self.model_type, self.model_name, self.model, 
-                 self.is_trained, self.feature_names, self.best_iteration,
+                 self.is_trained, self.best_iteration,
+                 self.feature_names, self.n_features, self.n_classes, 
                  self.feature_importance), f)
 
     def load(self, path):
         with open(path, 'rb') as f:
-            self.model_type, self.model_name, self.model, \
-            self.is_trained, self.feature_names, self.best_iteration, \
+            self.model_type, self.model_name, self.model,\
+            self.is_trained, self.best_iteration,\
+            self.feature_names, self.n_features, self.n_classes,\
             self.feature_importance = pickle.load(f)
