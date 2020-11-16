@@ -8,6 +8,7 @@ from lightgbm import LGBMClassifier, LGBMRegressor, LGBMRanker, LGBMModel
 from lightgbm.compat import _LGBMLabelEncoder
 import xgboost as xgb
 from xgboost import XGBClassifier, XGBRegressor, XGBRanker, XGBRFRegressor, XGBRFClassifier, XGBModel
+from xgboost.compat import XGBoostLabelEncoder
 from sklearn.calibration import calibration_curve, CalibratedClassifierCV
 from sklearn.inspection import permutation_importance
 
@@ -18,6 +19,7 @@ import seaborn as sns
 from .utils import booster2sklearn
 from ..utils import vector_normalize
 from .logger import LGBMLogger, XGBLogger
+from .optuna_utils import OPTUNA_ZOO
 
 try:
     import optuna
@@ -36,42 +38,12 @@ MODEL_ZOO = {
 }
 
 
-OPTUNA_ZOO = {
-    'CatBoostClassifier': lambda trial: {
-        "objective": trial.suggest_categorical("objective", ["Logloss", "CrossEntropy"]),
-        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.01, 0.1),
-        "depth": trial.suggest_int("depth", 1, 12),
-        "boosting_type": trial.suggest_categorical("boosting_type", ["Ordered", "Plain"]),
-        "bootstrap_type": trial.suggest_categorical(
-            "bootstrap_type", ["Bayesian", "Bernoulli", "MVS"]
-        )
-    }, 
-    'CatBoostRegressor': lambda trial: {
-        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.01, 0.1),
-        "depth": trial.suggest_int("depth", 1, 12),
-        "boosting_type": trial.suggest_categorical("boosting_type", ["Ordered", "Plain"]),
-        "bootstrap_type": trial.suggest_categorical(
-            "bootstrap_type", ["Bayesian", "Bernoulli", "MVS"]
-        )
-    },
-    'XGBClassifier': lambda trial: {
-        "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
-        "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
-        "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
-    }, 
-    'XGBRegressor': lambda trial: {
-        "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
-        "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
-        "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
-    },
-}
-
-
 class Trainer:
     '''
     Wrapper for sklearn like models
 
     Some useful features:
+    - One line cross validation
     - Get various kinds of feature importance
     - Plot calibration curve
     - Built-in probality calibration (WIP)
@@ -80,7 +52,7 @@ class Trainer:
     - Save and load your model
     '''
 
-    def __init__(self, model=None, path=None):
+    def __init__(self, model=None, path=None, serial='trainer0'):
         if model is not None:
             self.model_type = model
             self.model_name = type(self.model_type()).__name__
@@ -90,6 +62,7 @@ class Trainer:
         else:
             raise ValueError('either model or path must be given.')
         self.feature_importance = None
+        self.serial = serial
 
     def _data_check(self, data):
         assert isinstance(data, (list, tuple))
@@ -159,7 +132,10 @@ class Trainer:
                         _params["subsample"] = trial.suggest_float("subsample", 0.1, 1)
                     self.model = self.model_type(**_params)
                     self.model.fit(X=dtrain, eval_set=dvalid, **_fit_params)
-                    score = self.model.best_score_['validation'][params['eval_metric']]
+                    if eval_metric is None:
+                        score = self.model.best_score_['validation'][params['eval_metric']]
+                    else:
+                        score = eval_metric(self.model, valid_data)
                     return score
                 study = optuna.create_study(direction='maximize' if maximize else 'minimize')
                 study.optimize(
@@ -217,7 +193,8 @@ class Trainer:
             if convert_to_sklearn:
                 self.model = booster2sklearn(
                     self.model, self.model_type, self.n_features, self.n_classes)
-                self.model._le = _LGBMLabelEncoder().fit(train_data[1]) # internal label encoder 
+                if self.model_name == 'LGBMRegressor':
+                    self.model._le = _LGBMLabelEncoder().fit(train_data[1]) # internal label encoder 
 
         elif self.model_name in MODEL_ZOO['xgb']:
             ''' XGBoost '''
@@ -266,10 +243,13 @@ class Trainer:
                         _params, dtrain=dtrain, 
                         evals=[(dtrain, 'train'), (dvalid, 'valid')],
                         evals_result=res, **_fit_params)
-                    if maximize:
-                        score = np.max(res['valid'][_params['eval_metric']])
+                    if eval_metric is None:
+                        if maximize:
+                            score = np.max(res['valid'][_params['eval_metric']])
+                        else:
+                            score = np.min(res['valid'][_params['eval_metric']])
                     else:
-                        score = np.min(res['valid'][_params['eval_metric']])
+                        score = eval_metric(self.model, dvalid)
                     return score
                 study = optuna.create_study(direction='maximize' if maximize else 'minimize')
                 study.optimize(
@@ -295,8 +275,26 @@ class Trainer:
             if convert_to_sklearn:
                 self.model = booster2sklearn(
                     self.model, self.model_type, self.n_features, self.n_classes)
+                if self.model_name == 'XGBRegressor':
+                    self.model._le = XGBoostLabelEncoder().fit(train_data[1])
 
         else:
+            # Optuna integration
+            if tune_model:
+                if eval_metric is None:
+                    raise ValueError('eval_metric is necessary for optuna.')
+                def sklearn_objective(trial):
+                    _params = params.copy()
+                    _optuna_params = optuna_params
+                    if _optuna_params is None:
+                        _optuna_params = OPTUNA_ZOO[self.model_name](trial)
+                    _params.update(_optuna_params)
+                    self.model = self.model_type(**_params)
+                    score = eval_metric(self.model, valid_data)
+                    return score
+                study = optuna.create_study(direction='maximize' if maximize else 'minimize')
+                study.optimize(
+                    sklearn_objective, n_trials=n_trials, timeout=timeout, n_jobs=1)
             self.model = self.model_type(**params)
             self.model.fit(train_data[0], train_data[1], **fit_params)
             self.best_iteration = -1
