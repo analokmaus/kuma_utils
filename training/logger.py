@@ -18,11 +18,21 @@ class LGBMLogger:
     def __call__(self, env):
         log_str = f'{get_time()} '
         log_str += f'[iter {env.iteration:05}] '
-        for dataset, metric_name, metric, _ in env.evaluation_result_list:
-            log_str += f'{dataset} {metric_name} {metric:.6f} / '
+        log_type = 'lgb' if len(env.evaluation_result_list[0]) == 4 else 'xgb'
+        if log_type == 'lgb':
+            for dataset, metric_name, metric, _ in env.evaluation_result_list:
+                log_str += f'{dataset} {metric_name} {metric:.6f} / '
+        elif log_type == 'xgb':
+            for key, metric in env.evaluation_result_list:
+                log_str += f'{key} {metric:.6f} / '
         log_str += '\n'
         with open(self.path, 'a') as f:
             f.write(log_str)
+
+    def write(self, text):
+        text = get_time() + ' ' + text
+        with open(self.path, 'a') as f:
+            f.write(text)
 
 
 class XGBLogger:

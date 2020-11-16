@@ -18,7 +18,7 @@ import seaborn as sns
 
 from .utils import booster2sklearn
 from ..utils import vector_normalize
-from .logger import LGBMLogger, XGBLogger
+from .logger import LGBMLogger
 from .optuna_utils import OPTUNA_ZOO
 
 try:
@@ -40,7 +40,7 @@ MODEL_ZOO = {
 
 class Trainer:
     '''
-    Wrapper for sklearn like models
+    Amazing wrapper for sklearn like models
 
     Some useful features:
     - One line cross validation
@@ -78,11 +78,11 @@ class Trainer:
               # Dataset
               train_data, valid_data=(), cat_features=None, 
               # Model
-              params=None, fit_params=None, convert_to_sklearn=True, 
+              params={}, fit_params={}, convert_to_sklearn=True, 
               # Probability calibration
               calibration=False, calibration_method='isotonic', calibration_cv=5,
               # Optuna
-              tune_model=False, optuna_params=None, maximize=False, 
+              tune_model=False, optuna_params=None, maximize=True, 
               eval_metric=None, n_trials=None, timeout=None, 
               # Misc
               logger=None, n_jobs=-1):
@@ -118,7 +118,7 @@ class Trainer:
             if tune_model:
                 _fit_params = fit_params.copy()
                 if 'verbose_eval' in _fit_params.keys():
-                    _fit_params['verbose_eval'] = False
+                    _fit_params.update({'verbose_eval': False})
                 def cat_objective(trial):
                     _params = params.copy()
                     _optuna_params = optuna_params
@@ -148,6 +148,7 @@ class Trainer:
             self.model = self.model_type(**_params)
             self.model.fit(X=dtrain, eval_set=dvalid, **fit_params)
             self.best_iteration = self.model.get_best_iteration()
+            self.best_score = self.model.best_score_['validation'][params['eval_metric']]
 
         elif self.model_name in MODEL_ZOO['lgb']:
             ''' LightGBM '''
@@ -169,7 +170,7 @@ class Trainer:
             if tune_model:
                 _fit_params = fit_params.copy()
                 if 'verbose_eval' in _fit_params.keys():
-                    _fit_params['verbose_eval'] = False
+                    _fit_params.update({'verbose_eval': False})
                 self.model = lgb_tune.train(
                     params, train_set=dtrain, valid_sets=[dtrain, dvalid], **_fit_params)
                 # _params = self.model.params.copy()
@@ -178,22 +179,28 @@ class Trainer:
                 _params = params.copy()
 
                 if isinstance(logger, (str, Path)):
-                    callbacks = [LGBMLogger(logger)]
+                    callbacks = [LGBMLogger(logger, params, fit_params)]
                 elif isinstance(logger, LGBMLogger):
                     callbacks = [logger]
                 elif logger is None:
                     callbacks = None
                 else:
                     raise ValueError('invalid logger.')
-
+                
+                res = {}
                 self.model = lgb.train(
-                    _params, train_set=dtrain, valid_sets=[dtrain, dvalid], callbacks=callbacks, **fit_params)
+                    _params, train_set=dtrain, valid_sets=[dtrain, dvalid], 
+                    callbacks=callbacks, evals_result=res, **fit_params)
                 self.best_iteration = self.model.best_iteration
+                if maximize:
+                    self.best_score = np.max(res['valid_1'][_params['metric']])
+                else:
+                    self.best_score = np.min(res['valid_1'][_params['metric']])
 
             if convert_to_sklearn:
                 self.model = booster2sklearn(
                     self.model, self.model_type, self.n_features, self.n_classes)
-                if self.model_name == 'LGBMRegressor':
+                if self.model_name == 'LGBMClassifier':
                     self.model._le = _LGBMLabelEncoder().fit(train_data[1]) # internal label encoder 
 
         elif self.model_name in MODEL_ZOO['xgb']:
@@ -216,7 +223,7 @@ class Trainer:
             if tune_model:
                 _fit_params = fit_params.copy()
                 if 'verbose_eval' in _fit_params.keys():
-                    _fit_params['verbose_eval'] = False
+                    _fit_params.update({'verbose_eval': False})
                 def xgb_objective(trial):
                     _params = params.copy()
                     _optuna_params = optuna_params
@@ -260,22 +267,27 @@ class Trainer:
                 _params = params.copy()
 
             if isinstance(logger, (str, Path)):
-                callbacks = [XGBLogger(logger)]
+                callbacks = [LGBMLogger(logger, params, fit_params)]
             elif isinstance(logger, LGBMLogger):
                 callbacks = [logger]
             elif logger is None:
                 callbacks = None
             else:
                 raise ValueError('invalid logger.')
-
+            
+            res = {}
             self.model = xgb.train(
                 _params, dtrain=dtrain, evals=[(dtrain, 'train'), (dvalid, 'valid')], 
-                callbacks=callbacks, **fit_params)
+                callbacks=callbacks, evals_result=res, **fit_params)
             self.best_iteration = self.model.best_iteration
+            if maximize:
+                self.best_score = np.max(res['valid'][_params['eval_metric']])
+            else:
+                self.best_score = np.min(res['valid'][_params['eval_metric']])
             if convert_to_sklearn:
                 self.model = booster2sklearn(
                     self.model, self.model_type, self.n_features, self.n_classes)
-                if self.model_name == 'XGBRegressor':
+                if self.model_name == 'XGBClassifier':
                     self.model._le = XGBoostLabelEncoder().fit(train_data[1])
 
         else:
@@ -290,6 +302,7 @@ class Trainer:
                         _optuna_params = OPTUNA_ZOO[self.model_name](trial)
                     _params.update(_optuna_params)
                     self.model = self.model_type(**_params)
+                    self.model.fit(train_data[0], train_data[1], **fit_params)
                     score = eval_metric(self.model, valid_data)
                     return score
                 study = optuna.create_study(direction='maximize' if maximize else 'minimize')
@@ -298,6 +311,7 @@ class Trainer:
             self.model = self.model_type(**params)
             self.model.fit(train_data[0], train_data[1], **fit_params)
             self.best_iteration = -1
+            self.best_score = eval_metric(self.model, valid_data)
 
         self.is_trained = True
 
@@ -320,6 +334,9 @@ class Trainer:
 
     def get_best_iteration(self):
         return self.best_iteration
+
+    def get_best_score(self):
+        return self.best_score
 
     def get_permutation_importance(self, fit_params):
         assert fit_params is not None
