@@ -18,12 +18,14 @@ OPTUNA_ZOO = {
         )
     },
     'XGBClassifier': lambda trial: {
-        "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
+        # "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
+        "booster": trial.suggest_categorical("booster", ["gbtree", "dart"]),
         "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
         "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
     },
     'XGBRegressor': lambda trial: {
-        "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
+        # "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
+        "booster": trial.suggest_categorical("booster", ["gbtree", "dart"]),
         "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
         "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
     },

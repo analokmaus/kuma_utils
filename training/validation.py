@@ -5,11 +5,8 @@ from sklearn.model_selection import KFold
 from .trainer import Trainer
 from .logger import LGBMLogger
 
-try:
-    import optuna
-    import optuna.integration.lightgbm as lgb_tune
-except ModuleNotFoundError:
-    print('optuna not found.')
+import optuna
+from .optuna import lightgbm as lgb_tune
 
 from pathlib import Path
 
@@ -50,6 +47,7 @@ class CrossValidator:
               # Optuna
               tune_model=False, optuna_params=None, maximize=True,
               eval_metric=None, n_trials=None, timeout=None, 
+              lgbm_n_trials=[7, 20, 10, 6, 20], 
               # Misc
               logger=None, n_jobs=-1):
 
@@ -85,8 +83,9 @@ class CrossValidator:
             trn.train(
                 train_data=train_data, valid_data=valid_data, cat_features=cat_features,
                 params=params, fit_params=_fit_params,
-                tune_model=False, # do not tune model internally
+                tune_model=tune_model, optuna_params=optuna_params,
                 maximize=maximize, eval_metric=eval_metric,
+                n_trials=n_trials, timeout=timeout, 
                 logger=_logger, n_jobs=n_jobs
             )
             self.models.append(trn)

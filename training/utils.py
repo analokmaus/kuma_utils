@@ -62,3 +62,26 @@ def rmse_metric(model, data):
         target = data[1]
         approx = model.predict(data[0])
     return np.sqrt(mean_squared_error(target, approx))
+
+
+class ModelExtractor:
+    '''
+    Model extractor for lightgbm and xgboost .cv()
+    '''
+
+    def __init__(self):
+        self.model = None
+
+    def __call__(self, env):
+        if env.model is not None:
+            # lightgbm
+            self.model = env.model
+        else:
+            # xgboost
+            self.model = [cvpack.bst for cvpack in env.cvfolds]
+
+    def get_model(self):
+        return self.model
+
+    def get_best_iteration(self):
+        return self.model.best_iteration
