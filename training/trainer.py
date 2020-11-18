@@ -116,7 +116,7 @@ class Trainer:
             assert dshape == len(d)
             dshape = len(d)
 
-    def _parse_eval_metric(self, params):
+    def _parse_eval_metric(self, params, maximize):
         for key in ['metric', 'eval_metric']:
             if key in params.keys():
                 if isinstance(params[key], (list, tuple)):
@@ -125,12 +125,11 @@ class Trainer:
                 else:
                     main_metric = params[key]
                 if not main_metric in DIRECTION['maximize'] + DIRECTION['minimize']:
-                    raise ValueError(
-                        'metric direction must be specified. maximize=?')
-                maximize = main_metric in DIRECTION['maximize']
-                return main_metric, maximize
+                    print(f'specify optimization direction for metric {main_metric}.')
+                _maximize = main_metric in DIRECTION['maximize']
+                return main_metric, _maximize
         else:
-            return None, None
+            return None, maximize
 
     def train(self, 
               # Dataset
@@ -155,8 +154,7 @@ class Trainer:
         else:
             self.feature_names = [f'f{i}' for i in range(self.n_features)]
 
-        main_metric, _maximize = self._parse_eval_metric(params)
-        maxmize = _maximize if maximize is None else None
+        main_metric, maximize = self._parse_eval_metric(params, maximize)
         if eval_metric is not None and maximize is None:
             raise ValueError('metric direction must be specified.')
     
@@ -264,11 +262,14 @@ class Trainer:
                 if 'verbose_eval' in _fit_params.keys():
                     _fit_params.update({'verbose_eval': False})
                 _params.update({'metric':main_metric})
-                self.model = lgb_tune.train(
-                    _params, train_set=dtrain, valid_sets=[dtrain, dvalid], 
+                tuner = lgb_tune.LightGBMTuner(
+                    _params, train_set=dtrain, valid_sets=[dtrain, dvalid],
                     n_trials_config=lgbm_n_trials, **_fit_params)
-                # _params = self.model.params.copy()
+                tuner.run()
+                self.model = tuner.get_best_booster()
+                self.best_score = tuner.best_score
                 self.best_iteration = self.model.best_iteration
+                del tuner
             else:
                 _params = params.copy()
                 
@@ -466,8 +467,7 @@ class Trainer:
         else:
             self.feature_names = [f'f{i}' for i in range(self.n_features)]
 
-        main_metric, maximize = self._parse_eval_metric(params)
-        maxmize = _maximize if maximize is None else None
+        main_metric, maximize = self._parse_eval_metric(params, maximize)
         if eval_metric is not None and maximize is None:
             raise ValueError('metric direction must be specified.')
 
@@ -834,7 +834,7 @@ class Trainer:
         approx = self.smart_predict(X, **predict_params)
         if isinstance(approx, list):
             approx = np.stack(approx).mean(0)
-        if len(self.approx.shape) > 1 and self.approx.shape[1] == 2:
+        if len(approx.shape) > 1 and approx.shape[1] == 2:
             approx = approx[:, 1]
         else:
             raise ValueError('calibration curve is only for binary classification.')

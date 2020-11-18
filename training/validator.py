@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold
+from sklearn.calibration import calibration_curve
 import optuna
 
 import matplotlib.pyplot as plt
@@ -13,7 +14,6 @@ except:
 
 from .trainer import Trainer, MODEL_ZOO
 from .logger import LGBMLogger
-from .optuna import lightgbm as lgb_tune
 
 from pathlib import Path
 import pickle
@@ -216,7 +216,7 @@ class CrossValidator:
         approx = self.smart_predict(X, **predict_params)
         if isinstance(approx, list):
             approx = np.stack(approx).mean(0)
-        if len(self.approx.shape) > 1 and self.approx.shape[1] == 2:
+        if len(approx.shape) > 1 and approx.shape[1] == 2:
             approx = approx[:, 1]
         else:
             raise ValueError('calibration curve is only for binary classification.')
