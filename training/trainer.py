@@ -19,8 +19,12 @@ from copy import deepcopy
 import matplotlib.pyplot as plt
 import matplotlib.cm as colormap
 import seaborn as sns
+try:
+    import japanize_matplotlib
+except:
+    pass
 
-from .utils import booster2sklearn, ModelExtractor
+from .utils import booster2sklearn, ModelExtractor, auc_metric, mse_metric
 from ..utils import vector_normalize
 from .logger import LGBMLogger
 from .optuna import OPTUNA_ZOO
@@ -35,6 +39,33 @@ MODEL_ZOO = {
     'xgb': ['XGBClassifier', 'XGBRegressor', 'XGBRanker', 'XGBRFRegressor', 'XGBRFClassifier', 'XGBModel'],
     'lgb': ['LGBMClassifier', 'LGBMRegressor', 'LGBMRanker', 'LGBMModel'],
     'cat': ['CatBoost', 'CatBoostClassifier', 'CatBoostRegressor']
+}
+
+
+DIRECTION = {
+    'maximize': [
+        # CatBoost
+        'Precision', 'Recall', 'F1', 'BalancedAccuracy', 'MCC', 'Accuracy', 
+        'AUC', 'Kappa', 'WKappa', 'LogLikelihoodOfPrediction', 'R2', 'NDCG'
+        # LightGBM
+        'map', 'auc', 'average_precision', 'ndcg', 
+        # XGBoost
+        'auc', 'aucpr', 'map', 'ndcg'
+    ],
+    'minimize': [
+        # CatBoost
+        'Logloss', 'CrossEntropy', 'BalancedErrorRate', 'HingeLoss', 'HammingLoss', 
+        'ZeroOneLoss', 'MAE', 'MAPE', 'Poisson', 'Quantile', 'RMSE', 'Lq', 'Huber',
+        'FairLoss', 'SMAPE', 'MSLE', 'MultiRMSE', 'MultiClass', 'MultiClassOneVsAll', 
+        # LightGBM
+        'l1', 'mean_absolute_error', 'mae', 'l2', 'mean_squared_error', 'mse', 'regression', 
+        'rmse', 'oot_mean_squared_error', 'quantile', 'mape', 'huber', 'fair', 'poisson', 
+        'binary_logloss', 'binary', 'binary_error', 'multi-logloss', 'multiclass', 'softmax',
+        'multi-error', 'cross_entropy', 'kullback_leibler', 
+        # XGBoost
+        'rmse', 'rmsle', 'mae', 'mape', 'mphe', 'logloss', 'error', 'merror', 'mlogloss',
+        'poisson-nlogli'
+    ]
 }
 
 
@@ -62,17 +93,17 @@ class Trainer:
             self.model_type = model
             self.model_name = type(self.model_type()).__name__
             self.is_trained = False
+            self.best_score = None
+            self.best_iteration = None
+            self.feature_names = None
+            self.n_features = None
+            self.n_classes = None
+            self.feature_importance = None
         elif path is not None:
             self.load(path)
         else:
             raise ValueError('either model or path must be given.')
         
-        self.best_score = None
-        self.best_iteration = None
-        self.feature_names = None
-        self.n_features = None
-        self.n_classes = None
-        self.feature_importance = None
         self.serial = serial
 
     def _data_check(self, data):
@@ -85,6 +116,22 @@ class Trainer:
             assert dshape == len(d)
             dshape = len(d)
 
+    def _parse_eval_metric(self, params):
+        for key in ['metric', 'eval_metric']:
+            if key in params.keys():
+                if isinstance(params[key], (list, tuple)):
+                    print('setting multiple metrics are not recommended.')
+                    main_metric = params[key][0]
+                else:
+                    main_metric = params[key]
+                if not main_metric in DIRECTION['maximize'] + DIRECTION['minimize']:
+                    raise ValueError(
+                        'metric direction must be specified. maximize=?')
+                maximize = main_metric in DIRECTION['maximize']
+                return main_metric, maximize
+        else:
+            return None, None
+
     def train(self, 
               # Dataset
               train_data, valid_data=(), cat_features=None, 
@@ -93,7 +140,7 @@ class Trainer:
               # Probability calibration
               calibration=False, calibration_method='isotonic', calibration_cv=5,
               # Optuna
-              tune_model=False, optuna_params=None, maximize=True, 
+              tune_model=False, optuna_params=None, maximize=None, 
               eval_metric=None, n_trials=None, timeout=None, 
               lgbm_n_trials=[7, 20, 10, 6, 20], 
               # Misc
@@ -108,6 +155,11 @@ class Trainer:
         else:
             self.feature_names = [f'f{i}' for i in range(self.n_features)]
 
+        main_metric, _maximize = self._parse_eval_metric(params)
+        maxmize = _maximize if maximize is None else None
+        if eval_metric is not None and maximize is None:
+            raise ValueError('metric direction must be specified.')
+    
         if isinstance(logger, (str, Path)):
             callbacks = [LGBMLogger(logger, params, fit_params)]
         elif isinstance(logger, LGBMLogger):
@@ -208,10 +260,12 @@ class Trainer:
             # Optuna intergration
             if tune_model:
                 _fit_params = fit_params.copy()
+                _params = params.copy()
                 if 'verbose_eval' in _fit_params.keys():
                     _fit_params.update({'verbose_eval': False})
+                _params.update({'metric':main_metric})
                 self.model = lgb_tune.train(
-                    params, train_set=dtrain, valid_sets=[dtrain, dvalid], 
+                    _params, train_set=dtrain, valid_sets=[dtrain, dvalid], 
                     n_trials_config=lgbm_n_trials, **_fit_params)
                 # _params = self.model.params.copy()
                 self.best_iteration = self.model.best_iteration
@@ -223,9 +277,9 @@ class Trainer:
                     _params, train_set=dtrain, valid_sets=[dtrain, dvalid], 
                     callbacks=callbacks, evals_result=res, **fit_params)
                 if maximize:
-                    self.best_score = np.max(res['valid_1'][_params['metric']])
+                    self.best_score = np.max(res['valid_1'][main_metric])
                 else:
-                    self.best_score = np.min(res['valid_1'][_params['metric']])
+                    self.best_score = np.min(res['valid_1'][main_metric])
                 self.best_iteration = self.model.best_iteration
 
             if convert_to_sklearn:
@@ -281,7 +335,7 @@ class Trainer:
                             "skip_drop", 1e-8, 1.0, log=True)
                     res = {}
                     pruning_callback = optuna.integration.XGBoostPruningCallback(
-                        trial, f'valid-{_params["eval_metric"]}')
+                        trial, f'valid-{main_metric}')
                     self.model = xgb.train(
                         _params, dtrain=dtrain, 
                         evals=[(dtrain, 'train'), (dvalid, 'valid')],
@@ -289,9 +343,9 @@ class Trainer:
 
                     if eval_metric is None:
                         if maximize:
-                            score = np.max(res['valid'][_params['eval_metric']])
+                            score = np.max(res['valid'][main_metric])
                         else:
-                            score = np.min(res['valid'][_params['eval_metric']])
+                            score = np.min(res['valid'][main_metric])
                     else:
                         score = eval_metric(self.model, dvalid)
                     
@@ -321,9 +375,9 @@ class Trainer:
                     _params, dtrain=dtrain, evals=[(dtrain, 'train'), (dvalid, 'valid')], 
                     callbacks=callbacks, evals_result=res, **fit_params)
                 if maximize:
-                    self.best_score = np.max(res['valid'][_params['eval_metric']])
+                    self.best_score = np.max(res['valid'][main_metric])
                 else:
-                    self.best_score = np.min(res['valid'][_params['eval_metric']])
+                    self.best_score = np.min(res['valid'][main_metric])
                 self.best_iteration = self.model.best_ntree_limit
 
             if convert_to_sklearn:
@@ -333,11 +387,18 @@ class Trainer:
                     self.model._le = XGBoostLabelEncoder().fit(train_data[1])
 
         else:
+            ''' Other skelarn models '''
+            if eval_metric is None:
+                if self.n_classes == 2:
+                    eval_metric = auc_metric
+                    maximize = True
+                else:
+                    eval_metric = mse_metric
+                    maximize = False
+                print('eval_metric automatically selected.')
+
             # Optuna integration
             if tune_model:
-                if eval_metric is None:
-                    raise ValueError('eval_metric is necessary for optuna.')
-
                 self.best_score = None
                 self.best_model = None
 
@@ -373,7 +434,8 @@ class Trainer:
                 self.model = self.model_type(**params)
                 self.model.fit(train_data[0], train_data[1], **fit_params)
                 self.best_score = eval_metric(self.model, valid_data)
-            
+                print(f'[-1]\tbest score is {self.best_score:.6f}')
+
             self.best_iteration = -1
 
         self.is_trained = True
@@ -390,7 +452,7 @@ class Trainer:
            # Model
            params={}, fit_params={}, convert_to_sklearn=True,
            # Optuna
-           tune_model=False, optuna_params=None, maximize=True,
+           tune_model=False, optuna_params=None, maximize=None,
            eval_metric=None, n_trials=None, timeout=None,
            lgbm_n_trials=[7, 20, 10, 6, 20],
            # Misc
@@ -404,6 +466,11 @@ class Trainer:
         else:
             self.feature_names = [f'f{i}' for i in range(self.n_features)]
 
+        main_metric, maximize = self._parse_eval_metric(params)
+        maxmize = _maximize if maximize is None else None
+        if eval_metric is not None and maximize is None:
+            raise ValueError('metric direction must be specified.')
+
         if isinstance(logger, (str, Path)):
             callbacks = [LGBMLogger(logger, params, fit_params)]
         elif isinstance(logger, LGBMLogger):
@@ -415,29 +482,6 @@ class Trainer:
 
         if self.model_name in MODEL_ZOO['cat']:
             raise NotImplementedError('catboost is incompatible with .cv().')
-            # ''' Catboost '''
-            # dtrain = CatPool(
-            #     data=data[0],
-            #     label=data[1],
-            #     weight=data[2] if len(data) == 3 else None,
-            #     cat_features=cat_features,
-            #     thread_count=n_jobs)
-
-            # # Optuna integration
-            # if tune_model:
-            #     pass
-
-            # else:
-            #     _params = params.copy()
-            #     # self.model = self.model_type(**_params)
-            #     # self.model.fit(X=dtrain, eval_set=dvalid, **fit_params)
-            #     results = cat.cv(pool=dtrain, params=_params, folds=folds, 
-            #                      as_pandas=False, **fit_params)
-            #     # print(results.keys())
-            #     # self.best_score = self.model.best_score_[
-            #     #     'validation'][params['eval_metric']]
-
-            # # self.best_iteration = self.model.get_best_iteration()
 
         elif self.model_name in MODEL_ZOO['lgb']:
             ''' LightGBM '''
@@ -450,10 +494,12 @@ class Trainer:
             # Optuna intergration
             if tune_model:
                 _fit_params = fit_params.copy()
+                _params = params.copy()
+                _params.update({'metric', main_metric})
                 if 'verbose_eval' in _fit_params.keys():
                     _fit_params.update({'verbose_eval': False})
                 tuner = lgb_tune.LightGBMTunerCV(
-                    params, dtrain, folds=folds, n_trials_config=lgbm_n_trials, 
+                    _params, dtrain, folds=folds, n_trials_config=lgbm_n_trials, 
                     return_cvbooster=True, **_fit_params)
                 tuner.run()
                 self.model = tuner.get_best_booster().boosters
@@ -469,12 +515,14 @@ class Trainer:
                 self.model = model_extractor.get_model().boosters
                 self.best_iteration = model_extractor.get_best_iteration()
                 if maximize:
-                    self.best_score = np.max(res[f'{_params["metric"]}-mean'])
+                    self.best_score = np.max(res[f'{main_metric}-mean'])
                 else:
-                    self.best_score = np.min(res[f'{_params["metric"]}-mean'])
+                    self.best_score = np.min(res[f'{main_metric}-mean'])
                 
             for i in range(len(self.model)):
                 self.model[i].best_iteration = self.best_iteration
+
+            print(f'[{self.best_iteration}]\tbest score is {self.best_score:.6f}')
 
             if convert_to_sklearn:
                 for i in range(len(self.model)):
@@ -535,14 +583,14 @@ class Trainer:
                     if eval_metric is None:
                         if maximize:
                             score = np.max(
-                                res[f'test-{_params["eval_metric"]}-mean'])
+                                res[f'test-{main_metric}-mean'])
                             best_iteration = np.argmax(
-                                res[f'test-{_params["eval_metric"]}-mean'])
+                                res[f'test-{main_metric}-mean'])
                         else:
                             score = np.min(
-                                res[f'test-{_params["eval_metric"]}-mean'])
+                                res[f'test-{main_metric}-mean'])
                             best_iteration = np.argmin(
-                                res[f'test-{_params["eval_metric"]}-mean'])
+                                res[f'test-{main_metric}-mean'])
                     else:
                         raise NotImplementedError('Do not use custom eval_metric for .cv() :(')
 
@@ -576,17 +624,19 @@ class Trainer:
 
                 if maximize:
                     self.best_score = np.max(
-                        res[f'test-{_params["eval_metric"]}-mean'])
+                        res[f'test-{main_metric}-mean'])
                     self.best_iteration = np.argmax(
-                        res[f'test-{_params["eval_metric"]}-mean'])
+                        res[f'test-{main_metric}-mean'])
                 else:
                     self.best_score = np.min(
-                        res[f'test-{_params["eval_metric"]}-mean'])
+                        res[f'test-{main_metric}-mean'])
                     self.best_iteration = np.argmin(
-                        res[f'test-{_params["eval_metric"]}-mean'])
+                        res[f'test-{main_metric}-mean'])
                 
                 for i in range(len(self.model)):
                     self.model[i].best_ntree_limit = self.best_iteration
+            
+            print(f'[{self.best_iteration}]\tbest score is {self.best_score:.6f}')
 
             if convert_to_sklearn:
                 for i in range(len(self.model)):
@@ -599,7 +649,6 @@ class Trainer:
             raise NotImplementedError(f'{self.model_name} is incompatible with .cv().')
 
         self.is_trained = True
-
 
     def predict(self, X, **kwargs):
         assert self.is_trained
@@ -638,6 +687,13 @@ class Trainer:
                     X, ntree_limit=self.get_best_iteration(), **kwargs)
             else:
                 return self.model.predict_proba(X, **kwargs)
+
+    def smart_predict(self, X, **kwargs):
+        if self.model_name[-10:] == 'Classifier' or \
+            self.model_name in ['SVC']:
+            return self.predict_proba(X, **kwargs)
+        else:
+            return self.predict(X, **kwargs)
 
     def get_model(self):
         return self.model
@@ -744,32 +800,45 @@ class Trainer:
 
         return {self.feature_names[i]: imp[i] for i in range(len(self.feature_names))}
 
-    def get_feature_importance(self, importance_type='auto', normalize=True, fit_params=None):
+    def get_feature_importance(self, importance_type='auto', normalize=True, fit_params=None, 
+                               as_pandas='auto'):
         if isinstance(self.model, list):
-            self.feature_importance = self._get_feature_importance(
-                self.model[0], importance_type, normalize, fit_params)
-            return self.feature_importance
+            self.feature_importance = [self._get_feature_importance(
+                m, importance_type, normalize, fit_params) for m in self.model]
+            if as_pandas in ['auto', True]:
+                return pd.DataFrame(self.feature_importance)
+            else:
+                return self.feature_importance
         else:
             self.feature_importance = self._get_feature_importance(
                 self.model, importance_type, normalize, fit_params)
-            return self.feature_importance
+            if as_pandas in ['auto', False]:
+                return self.feature_importance
+            else:
+                return pd.DataFrame([self.feature_importance])
 
     def plot_feature_importance(self, importance_type='auto', normalize=True, fit_params=None, 
-                                sorted=True, width=5, save_to=None):
-        imp_dict = self.get_feature_importance(importance_type, normalize, fit_params)
-        columns, imps = np.array(list(imp_dict.keys())), np.array(list(imp_dict.values()))
-        plt.figure(figsize=(width, len(columns) / 3))
-        order = np.argsort(imps)
-        colors = colormap.winter(np.arange(len(columns))/len(columns))
-        plt.barh(columns[order], imps[order], color=colors)
+                                sort=True, size=5, save_to=None):
+        imp_df = self.get_feature_importance(importance_type, normalize, fit_params, as_pandas=True)
+        plt.figure(figsize=(size, imp_df.shape[1]/3))
+        order = imp_df.mean().sort_values(ascending=False).index.tolist() \
+            if sort else None
+        sns.barplot(data=imp_df, orient='h', ci='sd',
+                    order=order, palette="coolwarm")
         if save_to is not None:
             plt.savefig(save_to)
         plt.show()
 
-    def plot_calibartion_curve(self, data, predict_params={}, width=4, save_to=None):
+    def plot_calibartion_curve(self, data, predict_params={}, size=4, save_to=None):
         X, y = data[0], data[1]
-        approx = self.predict_proba(X, **predict_params)[:, 1]
-        fig = plt.figure(figsize=(width, width*1.5), tight_layout=True)
+        approx = self.smart_predict(X, **predict_params)
+        if isinstance(approx, list):
+            approx = np.stack(approx).mean(0)
+        if len(self.approx.shape) > 1 and self.approx.shape[1] == 2:
+            approx = approx[:, 1]
+        else:
+            raise ValueError('calibration curve is only for binary classification.')
+        fig = plt.figure(figsize=(size, size*1.5), tight_layout=True)
         gs = fig.add_gridspec(3, 1)
         ax1 = fig.add_subplot(gs[0:2, 0])
         ax2 = fig.add_subplot(gs[2, 0])
