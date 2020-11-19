@@ -14,8 +14,7 @@ from .snapshot import *
 from .logger import *
 from .temperature_scaling import *
 from .fp16util import network_to_half
-from .stopper import DummyStopper
-from .callback import CallbackEnv, DummyEvent
+from .callback import CallbackEnv, EarlyStopping, SaveModelTrigger, EarlyStoppingTrigger
 
 try:
     from torchsummary import summary
@@ -122,7 +121,7 @@ class TorchTrainer:
 
         self.model.train()
         for batch_i, inputs in enumerate(loader):
-            batches_done = len(loader) * self.current_epoch + batch_i
+            batches_done = len(loader) * self.global_epoch + batch_i
 
             inputs = [t.to(self.device) for t in inputs]
             y = inputs[-1] # !: the last input is always target
@@ -162,7 +161,7 @@ class TorchTrainer:
                     (f'batch_loss_train[{self.serial}]', loss.item()),
                     (f'batch_lr_train[{self.serial}]', learning_rate)
                 ]
-                self.logger.list_of_scalars_summary(log_train_batch, batches_done)
+                self.tb_logger.list_of_scalars_summary(log_train_batch, batches_done)
 
             batch_weight = len(y) / loader.batch_size
             loss_total += loss.item() / total_batch * batch_weight
@@ -178,22 +177,22 @@ class TorchTrainer:
                 metric_total = self.eval_metric(approx, target, others)
             else:
                 metric_total = self.eval_metric(approx, target)
-        log_metrics_total = []
-        for log_metric in self.log_metrics:
+        monitor_metrics_total = []
+        for monitor_metric in self.monitor_metrics:
             if len(others) > 0:
-                log_metrics_total.append(log_metric(approx, target, others))
+                monitor_metrics_total.append(monitor_metric(approx, target, others))
             else:
-                log_metrics_total.append(log_metric(approx, target))
+                monitor_metrics_total.append(monitor_metric(approx, target))
 
         log_train = [
             (f'epoch_metric_train[{self.serial}]', metric_total),
             (f'epoch_loss_train[{self.serial}]', loss_total)
         ]
-        self.logger.list_of_scalars_summary(log_train, self.current_epoch)
+        self.tb_logger.list_of_scalars_summary(log_train, self.global_epoch)
         self.log['train']['loss'].append(loss_total)
         self.log['train']['metric'].append(metric_total)
         
-        return loss_total, metric_total, log_metrics_total
+        return loss_total, metric_total, monitor_metrics_total
 
     def valid_loop(self, loader, grad_accumulations=1, logger_interval=1):
         loss_total = 0.0
@@ -232,22 +231,22 @@ class TorchTrainer:
                 metric_total = self.eval_metric(approx, target, others)
             else:
                 metric_total = self.eval_metric(approx, target)
-        log_metrics_total = []
-        for log_metric in self.log_metrics:
+        monitor_metrics_total = []
+        for monitor_metric in self.monitor_metrics:
             if len(others) > 0:
-                log_metrics_total.append(log_metric(approx, target, others))
+                monitor_metrics_total.append(monitor_metric(approx, target, others))
             else:
-                log_metrics_total.append(log_metric(approx, target))
+                monitor_metrics_total.append(monitor_metric(approx, target))
 
         log_valid = [
             (f'epoch_metric_valid[{self.serial}]', metric_total),
             (f'epoch_loss_valid[{self.serial}]', loss_total)
         ]
-        self.logger.list_of_scalars_summary(log_valid, self.current_epoch)
+        self.tb_logger.list_of_scalars_summary(log_valid, self.global_epoch)
         self.log['valid']['loss'].append(loss_total)
         self.log['valid']['metric'].append(metric_total)
 
-        return loss_total, metric_total, log_metrics_total
+        return loss_total, metric_total, monitor_metrics_total
 
     def predict(self, loader, path=None, test_time_augmentations=1, verbose=True):
         if loader is None:
@@ -277,51 +276,18 @@ class TorchTrainer:
 
         return prediction
 
-    def print_info(self, info_items, info_seps, info):
-        log_str = ''
-        for sep, item in zip(info_seps, info_items):
-            if item == 'time':
-                current_time = time.strftime('%H:%M:%S', time.gmtime())
-                log_str += current_time
-            elif item == 'data':
-                log_str += info[item]
-            elif item in ['loss', 'metric']:
-                log_str += f'{item}={info[item]:.{self.round_float}f}'
-            elif item  == 'logmetrics':
-                if len(info[item]) > 0:
-                    for im, m in enumerate(info[item]): # list
-                        log_str += f'{item}{im}={m:.{self.round_float}f}'
-                        if im != len(info[item]) - 1:
-                            log_str += ' '
-            elif item == 'epoch':
-                align = len(str(self.max_epochs))
-                log_str += f'E{self.current_epoch:0{align}d}/{self.max_epochs}'
-            elif item == 'earlystopping':
-                if info['data'] == 'Trn':
-                    continue
-                counter, patience = self.stopper.state()
-                best = self.stopper.score()
-                if best is not None:
-                    log_str += f'best={best:.{self.round_float}f}'
-                    if counter > 0:
-                        log_str += f'*({counter}/{patience})'
-            log_str += sep
-        if len(log_str) > 0:
-            print(f'[{self.serial}] {log_str}')
-
     def train(self,
             # Essential
             criterion, optimizer, scheduler, 
             loader, num_epochs, loader_valid=None, loader_test=None,
             snapshot_path=None, resume=False,  # Snapshot
             multi_gpu=True, grad_accumulations=1, calibrate_model=False, # Train
-            eval_metric=None, eval_interval=1, log_metrics=[], # Evaluation
+            eval_metric=None, monitor_metrics=[], # Evaluation
             test_time_augmentations=1, predict_valid=True, predict_test=True,  # Prediction
-            event=DummyEvent(), stopper=DummyStopper(),  # Train add-ons
+            callbacks=[],  # Train add-ons
             # Logger and info
-            logger=DummyLogger(''), logger_interval=1, 
-            info_train=True, info_valid=True, info_interval=1, round_float=6,
-            info_format='[epoch] time data loss metric logmetrics earlystopping', verbose=True):
+            logger=None, tb_logger=DummyLogger(''), verbose_eval=1
+        ):
 
         if eval_metric is None:
             print(f'[{self.serial}] eval_metric is not set. Inversed criterion will be used instead.')
@@ -330,180 +296,127 @@ class TorchTrainer:
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.eval_metric = eval_metric
-        self.log_metrics = log_metrics
+        self.monitor_metrics = monitor_metrics
         self.logger = logger
-        self.event = deepcopy(event)
-        self.stopper = deepcopy(stopper)
-        self.current_epoch = 0
-
+        self.tb_logger = tb_logger
+        self.callbacks = callbacks
+        self.global_epoch = 0
         self.log = {
             'train': {'loss': [], 'metric': []},
             'valid': {'loss': [], 'metric': []}
         }
-        info_items = re.split(r'[^a-z]+', info_format)
-        info_seps = re.split(r'[a-z]+', info_format)
-        self.round_float = round_float
+        self.outoffold = None
+        self.prediction = None
 
         if snapshot_path is None:
             snapshot_path = Path().cwd()
         if not isinstance(snapshot_path, Path):
             snapshot_path = Path(snapshot_path)
-        if len(snapshot_path.suffix) > 0: # Is file
+        if len(snapshot_path.suffix) > 0: # file
             self.root_path = snapshot_path.parent
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        else: # Is dir
+        else: # dir
             self.root_path = snapshot_path
             snapshot_path = snapshot_path/'snapshot.pt'
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if not isinstance(self.log_metrics, (list, tuple, set)):
-            self.log_metrics = [self.log_metrics]
+        if not isinstance(self.monitor_metrics, (list, tuple, set)):
+            self.monitor_metrics = [self.monitor_metrics]
 
         self.model.to(self.device)
         if resume:
             load_snapshots_to_model(
-                snapshot_path, self.model, self.optimizer, self.scheduler, 
-                self.stopper, self.event, device=self.device)
-            self.current_epoch = load_epoch(snapshot_path)
+                snapshot_path, self.global_epoch, self.model, self.optimizer, self.scheduler,
+                self.callbacks, device=self.device)
             if verbose:
                 print(
-                    f'[{self.serial}] {snapshot_path} is loaded. Continuing from epoch {self.current_epoch}.')
+                    f'[{self.serial}] {snapshot_path} is loaded. Continuing from epoch {self.global_epoch}.')
         if self.is_fp16:
             self.model_to_fp16()
         if multi_gpu:
             self.model_to_parallel()
 
-        self.max_epochs = self.current_epoch + num_epochs
+        self.max_epochs = self.global_epoch + num_epochs
         loss_valid, metric_valid = np.inf, -np.inf
 
         for epoch in range(num_epochs):
-            self.current_epoch += 1
             start_time = time.time()
             if self.scheduler.__class__.__name__ == 'ReduceLROnPlateau':
                 self.scheduler.step(loss_valid)
             else:
                 self.scheduler.step()
 
-            ''' Callback a priori '''
-            self.event(
-                CallbackEnv(
-                    self.model, self.optimizer, self.scheduler, 
-                    self.stopper, self.criterion, self.eval_metric, 
-                    epoch, self.current_epoch, self.log
-                )
-            )
+            ''' Training '''
+            loss_train, metric_train, monitor_metrics_train = \
+                self.train_loop(loader, grad_accumulations, 1)
 
-            ### Training
-            loss_train, metric_train, log_metrics_train = \
-                self.train_loop(loader, grad_accumulations, logger_interval)
-
-            ### No validation set
             if loader_valid is None:
+                ''' No validation set '''
                 early_stopping_target = metric_train
+                loss_valid, metric_valid, monitor_metrics_valid = None, None, None
 
-                if self.stopper(early_stopping_target):  # score improved
-                    save_snapshots(snapshot_path, 
-                                   self.current_epoch, self.model, 
-                                   self.optimizer, self.scheduler, self.stopper, self.event)
-                
-                if info_train and epoch % info_interval == 0:
-                    self.print_info(info_items, info_seps, {
-                        'data': 'Trn',
-                        'loss': loss_train,
-                        'metric': metric_train, 
-                        'logmetrics': log_metrics_train
-                    })
-
-                if self.stopper.stop():
-                    if verbose:
-                        print("[{}] Training stopped by overfit detector. ({}/{})".format(
-                            self.serial, self.current_epoch-self.stopper.state()[1]+1, self.max_epochs))
-                        print(f"[{self.serial}] Best score is {self.stopper.score():.{self.round_float}f}")
-                    load_snapshots_to_model(str(snapshot_path), self.model, self.optimizer)
-                    if predict_valid:
-                        self.oof = self.predict(
-                            loader, test_time_augmentations=test_time_augmentations, verbose=verbose)
-                    if predict_test:
-                        self.pred = self.predict(
-                            loader_test, test_time_augmentations=test_time_augmentations, verbose=verbose)
-                    break
-
-                continue
-
-            if info_train and epoch % info_interval == 0:
-                self.print_info(info_items, info_seps, {
-                    'data': 'Trn',
-                    'loss': loss_train,
-                    'metric': metric_train,
-                    'logmetrics': log_metrics_train
-                })
-
-            ### Validation
-            if epoch % eval_interval == 0:
-                loss_valid, metric_valid, log_metrics_valid = \
-                    self.valid_loop(loader_valid, grad_accumulations, logger_interval)
+            else:
+                ''' Validation '''
+                loss_valid, metric_valid, monitor_metrics_valid = \
+                    self.valid_loop(loader_valid, grad_accumulations, 1)
                 
                 early_stopping_target = metric_valid
-                if self.stopper(early_stopping_target):  # score improved
-                    save_snapshots(snapshot_path,
-                                   self.current_epoch, self.model,
-                                   self.optimizer, self.scheduler, self.stopper, self.event)
-
-                if info_valid and epoch % info_interval == 0:
-                    self.print_info(info_items, info_seps, {
-                        'data': 'Val',
-                        'loss': loss_valid,
-                        'metric': metric_valid,
-                        'logmetrics': log_metrics_valid
-                    })
-
-            # Stopped by overfit detector
-            if self.stopper.stop():
-                if verbose:
-                    print("[{}] Training stopped by overfit detector. ({}/{})".format(
-                        self.serial, self.current_epoch-self.stopper.state()[1]+1, self.max_epochs))
-                    print(
-                        f"[{self.serial}] Best score is {self.stopper.score():.{self.round_float}f}")
-                load_snapshots_to_model(str(snapshot_path), self.model, self.optimizer)
-
-                if calibrate_model:
-                    if loader_valid is None:
-                        print('loader_valid is necessary for calibration.')
-                    else:
-                        self.calibrate_model(loader_valid)
-
-                if predict_valid:
-                    self.oof = self.predict(
-                        loader_valid, test_time_augmentations=test_time_augmentations, verbose=verbose)
-                if predict_test:
-                    self.pred = self.predict(
-                        loader_test, test_time_augmentations=test_time_augmentations, verbose=verbose)
-                break
 
             # TODO: Callback a posteriori
+            ''' Callbacks '''
+            for func in self.callbacks + [self.logger._callback]:
+                try:
+                    func(CallbackEnv(
+                        self.serial, 
+                        self.model, self.optimizer, self.scheduler, self.criterion,
+                        self.eval_metric, epoch, self.global_epoch, self.max_epochs, 
+                        early_stopping_target, 
+                        loss_train, loss_valid, metric_train, metric_valid, 
+                        monitor_metrics_train, monitor_metrics_valid
+                    ))
+
+                except SaveModelTrigger:
+                    ''' Save model '''
+                    save_snapshots(snapshot_path,
+                        self.global_epoch, self.model,
+                        self.optimizer, self.scheduler, self.callbacks)
+
+                except EarlyStoppingTrigger:
+                    ''' Early stop '''
+                    print('earlkystop')
+                    load_snapshots(
+                        str(snapshot_path), model=self.model, optimizer=self.optimizer)
+
+                    if calibrate_model:
+                        if loader_valid is None:
+                            raise ValueError('loader_valid is necessary for calibration.')
+                        else:
+                            self.calibrate_model(loader_valid)
+
+                    if predict_valid:
+                        if loader_valid is None:
+                            self.outoffold = self.predict(
+                                loader, test_time_augmentations=test_time_augmentations)
+                        else:
+                            self.outoffold = self.predict(
+                                loader_valid, test_time_augmentations=test_time_augmentations)
+                    if predict_test:
+                        self.prediction = self.predict(
+                            loader_test, test_time_augmentations=test_time_augmentations)
+                    break
+
+            else:
+                '''
+                No early stopping
+                '''
+                self.global_epoch += 1
+                continue
+
+            break
 
         else:  # Not stopped by overfit detector
-            if verbose:
-                print(
-                    f"[{self.serial}] Best score is {self.stopper.score():.{self.round_float}f}")
-            load_snapshots_to_model(str(snapshot_path), self.model, self.optimizer)
-
-            if calibrate_model:
-                if loader_valid is None:
-                    print('loader_valid is necessary for calibration.')
-                else:
-                    self.calibrate_model(loader_valid)
-
-            if predict_valid:
-                if loader_valid is None:
-                    self.oof = self.predict(
-                        loader, test_time_augmentations=test_time_augmentations, verbose=verbose)
-                else:
-                    self.oof = self.predict(
-                        loader_valid, test_time_augmentations=test_time_augmentations, verbose=verbose)
-            if predict_test:
-                self.pred = self.predict(
-                    loader_test, test_time_augmentations=test_time_augmentations, verbose=verbose)
+            print('Not stopped')
+            pass
     
     fit = train # for compatibility
 

@@ -21,8 +21,7 @@ def get_latest_sanpshot(dir, keyword=None):
 
 
 def save_snapshots(
-        path, epoch, model, optimizer, scheduler, 
-        stopper=None, event=None):
+        path, global_epoch, model, optimizer, scheduler, callbacks):
 
     if isinstance(model, torch.nn.DataParallel):
         module = model.module
@@ -30,18 +29,17 @@ def save_snapshots(
         module = model
 
     torch.save({
-        'epoch': epoch + 1,
+        'global_epoch': global_epoch + 1,
         'model': module.state_dict(),
         'optimizer': optimizer.state_dict(),
         'scheduler': scheduler.state_dict(),
-        'stopper': stopper.dump_state_dict() if stopper is not None else None,
-        'event': event.dump_state_dict() if event is not None else None
+        'callbacks': [func.state_dict() for func in callbacks],
     }, path)
 
 
-def load_snapshots_to_model(
-        path, model=None, optimizer=None, scheduler=None, 
-        stopper=None, event=None, device=None):
+def load_snapshots(
+        path, global_epoch=None, model=None, optimizer=None, scheduler=None, 
+        callbacks=None, device=None):
 
     if device is None:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -56,10 +54,11 @@ def load_snapshots_to_model(
         optimizer.load_state_dict(checkpoint['optimizer'])
     if scheduler is not None:
         scheduler.load_state_dict(checkpoint['scheduler'])
-    if stopper is not None:
-        stopper.load_state_dict(checkpoint['stopper'])
-    if event is not None:
-        event.load_state_dict(checkpoint['event'])
+    if callbacks is not None:
+        for func, state_dict in zip(callbacks, checkpoint['callbacks']):
+            func.load_state_dict(state_dict)
+    if global_epoch is not None:
+        global_epoch = checkpoint['global_epoch']
 
 
 def load_pretrained(path, model, ignore=[]):
@@ -72,8 +71,3 @@ def load_pretrained(path, model, ignore=[]):
                 continue
             model_weights[layer] = pretrained_weights[layer]
     model.load_state_dict(model_weights)
-
-
-def load_epoch(path):
-    checkpoint = torch.load(path)
-    return checkpoint['epoch']

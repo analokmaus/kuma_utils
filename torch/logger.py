@@ -2,7 +2,7 @@ import tensorflow as tf
 tf.compat.v1.disable_eager_execution() # TODO: write new Logger class for TensorFlow v2
 
 
-class Logger(object):
+class TensorBoardLogger(object):
     def __init__(self, log_dir):
         """Create a summary writer logging to log_dir."""
         self.writer = tf.compat.v1.summary.FileWriter(log_dir)
