@@ -44,8 +44,8 @@
     ┣ StratifiedGroupKFold      - Stratified group k-fold split.
     ┣ optuna                    - optuna modifications.
         ┣ lighgbm               - Optune lightgbm integration with modifiable n_trials.
-┣ metrics                       - Universal metric class for whatever library.
-    ┣ SeUnderSp                 - Sensitivity with specificity fixed.
+┣ metrics                       - Universal metrics
+    ┣ SeWithFixedSp             - Sensitivity with fixed specificity.
     ┣ RMSE
     ┣ AUC
     ┣ Accuracy
