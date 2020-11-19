@@ -1,5 +1,5 @@
 import numpy as np
-from sklearn.metrics import confusion_matrix, mean_squared_error
+from sklearn.metrics import confusion_matrix, roc_auc_score
 from .base import MetricTemplate
 
 

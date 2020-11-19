@@ -1,10 +1,8 @@
-import os
 import re
 import sys
 import time
 from pathlib import Path
 from tqdm import tqdm
-from collections import defaultdict
 from copy import copy, deepcopy
 
 import numpy as np
@@ -12,11 +10,12 @@ import pandas as pd
 
 import torch
 import torch.utils.data as D
-from .datasets import *
 from .snapshot import *
 from .logger import *
 from .temperature_scaling import *
 from .fp16util import network_to_half
+from .stopper import DummyStopper
+from .callback import CallbackEnv, DummyEvent
 
 try:
     from torchsummary import summary
@@ -36,158 +35,6 @@ try:
 except ModuleNotFoundError:
     print('nvidia apex not found.')
     APEX_FLAG = False
-        
-
-'''
-Stopper
-
-# Methods
-__call__(score) : bool  = return whether score is improved
-stop() : bool           = return whether to stop training or not
-state() : int, int      = return current / total
-score() : float         = return best score
-freeze()                = update score but never stop
-unfreeze()              = unset freeze()
-'''
-
-class DummyStopper:
-    ''' No stopper '''
-
-    def __init__(self):
-        pass
-
-    def __call__(self, val_loss):
-        return True
-
-    def stop(self):
-        return False
-
-    def state(self):
-        return 0, 0
-
-    def score(self):
-        return 0.0
-
-    def dump_state_dict(self):
-        return {}
-
-    def load_state_dict(self, checkpoint):
-        pass
-
-    def __repr__(self):
-        return 'No Stopper'
-
-
-class EarlyStopping(DummyStopper):
-    '''
-    Early stops the training if validation loss doesn't improve after a given patience.
-    patience: int   = early stopping rounds
-    maximize: bool  = whether maximize or minimize metric
-    '''
-
-    def __init__(self, patience=5, maximize=False):
-        self.patience = patience
-        self.counter = 0
-        self.log = []
-        self.best_score = None
-        self.early_stop = False
-        self.val_loss_min = np.inf
-        if maximize:
-            self.coef = 1
-        else:
-            self.coef = -1
-        self.frozen = False
-
-    def __call__(self, val_loss):
-        score = self.coef * val_loss
-        self.log.append(score)
-        if self.best_score is None:
-            self.best_score = score
-            return True
-        elif score < self.best_score:
-            if not self.frozen:
-                self.counter += 1
-            if self.counter >= self.patience:
-                self.early_stop = True
-            return False
-        else: # score improved
-            self.best_score = score
-            self.counter = 0
-            return True
-
-    def stop(self):
-        return self.early_stop
-
-    def state(self):
-        return self.counter, self.patience
-        
-    def score(self):
-        return self.best_score
-
-    def freeze(self):
-        self.frozen = True
-
-    def unfreeze(self):
-        self.frozen = False
-
-    def reset(self):
-        self.best_score = None
-
-    def dump_state_dict(self):
-        return {
-            'best_score': self.best_score,
-            'counter': self.counter,
-        }
-
-    def load_state_dict(self, checkpoint):
-        self.best_score = checkpoint['best_score']
-        self.counter = checkpoint['counter']
-
-    def __repr__(self):
-        return f'EarlyStopping({self.patience})'
-
-
-'''
-Event
-'''
-
-class DummyEvent:
-    ''' Dummy event does nothing '''
-
-    def __init__(self):
-        pass
-
-    def __call__(self, **kwargs):
-        pass
-
-    def dump_state_dict(self):
-        return {}
-
-    def load_state_dict(self, checkpoint):
-        pass
-
-    def __repr__(self):
-        return 'No Event'
-
-
-class NoEarlyStoppingNEpochs(DummyEvent):
-
-    def __init__(self, n):
-        self.n = n
-
-    def __call__(self, **kwargs):
-        if kwargs['global_epoch'] == 0:
-            kwargs['stopper'].freeze()
-            kwargs['stopper'].reset()
-            print(f"Epoch\t{kwargs['epoch']}: Earlystopping is frozen.")
-        elif kwargs['global_epoch'] < self.n:
-             kwargs['stopper'].reset()
-        elif kwargs['global_epoch'] == self.n:
-            kwargs['stopper'].unfreeze()
-            print(f"Epoch\t{kwargs['epoch']}: Earlystopping is unfrozen.")
-
-    def __repr__(self):
-        return f'NoEarlyStoppingNEpochs({self.n})'
 
 
 '''
@@ -232,8 +79,8 @@ class TorchTrainer:
                 device = torch.device(
                     'cuda' if torch.cuda.is_available() else 'cpu')
         
-        self.device = device
         self.serial = serial
+        self.device = device
         self.is_fp16 = fp16 # Automatically use apex if available
         self.is_xla = xla
         self.apex_opt_level = 'O1'
@@ -462,7 +309,7 @@ class TorchTrainer:
         if len(log_str) > 0:
             print(f'[{self.serial}] {log_str}')
 
-    def fit(self,
+    def train(self,
             # Essential
             criterion, optimizer, scheduler, 
             loader, num_epochs, loader_valid=None, loader_test=None,
@@ -474,7 +321,7 @@ class TorchTrainer:
             # Logger and info
             logger=DummyLogger(''), logger_interval=1, 
             info_train=True, info_valid=True, info_interval=1, round_float=6,
-            info_format='epoch time data loss metric logmetrics earlystopping', verbose=True):
+            info_format='[epoch] time data loss metric logmetrics earlystopping', verbose=True):
 
         if eval_metric is None:
             print(f'[{self.serial}] eval_metric is not set. Inversed criterion will be used instead.')
@@ -537,13 +384,18 @@ class TorchTrainer:
             else:
                 self.scheduler.step()
 
-            ### Event
-            event(**{'model': self.model, 'optimizer': self.optimizer, 'scheduler': self.scheduler,
-                     'stopper': self.stopper, 'criterion': self.criterion, 'eval_metric': self.eval_metric, 
-                     'epoch': epoch, 'global_epoch': self.current_epoch, 'log': self.log})
+            ''' Callback a priori '''
+            self.event(
+                CallbackEnv(
+                    self.model, self.optimizer, self.scheduler, 
+                    self.stopper, self.criterion, self.eval_metric, 
+                    epoch, self.current_epoch, self.log
+                )
+            )
 
             ### Training
-            loss_train, metric_train, log_metrics_train = self.train_loop(loader, grad_accumulations, logger_interval)
+            loss_train, metric_train, log_metrics_train = \
+                self.train_loop(loader, grad_accumulations, logger_interval)
 
             ### No validation set
             if loader_valid is None:
@@ -588,7 +440,8 @@ class TorchTrainer:
 
             ### Validation
             if epoch % eval_interval == 0:
-                loss_valid, metric_valid, log_metrics_valid = self.valid_loop(loader_valid, grad_accumulations, logger_interval)
+                loss_valid, metric_valid, log_metrics_valid = \
+                    self.valid_loop(loader_valid, grad_accumulations, logger_interval)
                 
                 early_stopping_target = metric_valid
                 if self.stopper(early_stopping_target):  # score improved
@@ -627,6 +480,8 @@ class TorchTrainer:
                         loader_test, test_time_augmentations=test_time_augmentations, verbose=verbose)
                 break
 
+            # TODO: Callback a posteriori
+
         else:  # Not stopped by overfit detector
             if verbose:
                 print(
@@ -650,126 +505,8 @@ class TorchTrainer:
                 self.pred = self.predict(
                     loader_test, test_time_augmentations=test_time_augmentations, verbose=verbose)
     
+    fit = train # for compatibility
+
     def calibrate_model(self, loader):
         self.model = TemperatureScaler(self.model).to(self.device)
         self.model.set_temperature(loader)
-
-
-'''
-Cross Validation for Tabular data
-'''
-
-class TorchCV: 
-    IGNORE_PARAMS = {
-        'loader', 'loader_valid', 'loader_test', 'snapshot_path', 'logger'
-    }
-    TASKS = {'binary', 'regression'}
-
-    def __init__(self, model, datasplit, device=None):
-        if device is None:
-            device = torch.device(
-                'cuda' if torch.cuda.is_available() else 'cpu')
-
-        self.model = model
-        self.device = device
-        self.datasplit = datasplit
-
-        self.models = []
-        self.oof = None
-        self.pred = None
-        self.imps = None
-
-    def run(self, X, y, X_test=None,
-            group=None, transform=None, task='binary', 
-            eval_metric=None, batch_size=64, n_splits=None,
-            snapshot_dir=None, logger=DummyLogger(''), 
-            fit_params={}, verbose=True):
-        
-        if not isinstance(eval_metric, (list, tuple, set)):
-            eval_metric = [eval_metric]
-        if snapshot_dir is None:
-            snapshot_dir = Path().cwd()
-        if not isinstance(snapshot_dir, Path):
-            snapshot_dir = Path(snapshot_dir)
-        snapshot_dir.mkdir(parents=True, exist_ok=True)
-        assert snapshot_dir.is_dir()
-        assert task in self.TASKS
-            
-        if n_splits is None:
-            K = self.datasplit.get_n_splits()
-        else:
-            K = n_splits
-
-        self.imps = np.zeros((X.shape[1], K))
-        self.scores = np.zeros((len(eval_metric), K))
-        self.numpy2dataset = Numpy2Dataset(task)
-
-        default_path = snapshot_dir/'default.pt'
-        save_snapshots(default_path, 0, self.model, fit_params['optimizer'], fit_params['scheduler'])
-        template = {}
-        for item in ['stopper', 'event']:
-            if item in fit_params.keys():
-                template[item] = deepcopy(fit_params[item])
-        for item in self.IGNORE_PARAMS:
-            if item in fit_params.keys():
-                fit_params.pop(item)
-
-        for fold_i, (train_idx, valid_idx) in enumerate(
-            self.datasplit.split(X, y, group)):
-
-            Xs = {'train': X[train_idx], 'valid': X[valid_idx],
-                  'test': X_test.copy() if X_test is not None else None}
-            ys = {'train': y[train_idx], 'valid': y[valid_idx]}
-
-            if transform is not None:
-                transform(Xs, ys)
-
-            ds_train = self.numpy2dataset(Xs['train'], ys['train'])
-            ds_valid = self.numpy2dataset(Xs['valid'], ys['valid'])
-            ds_test = self.numpy2dataset(Xs['test'], np.arange(len(Xs['test'])))
-
-            loader_train = D.DataLoader(ds_train, batch_size=batch_size, shuffle=True)
-            loader_valid = D.DataLoader(ds_valid, batch_size=batch_size, shuffle=False)
-            loader_test = D.DataLoader(ds_test, batch_size=batch_size, shuffle=False)
-            
-            params_fold = copy(fit_params)
-            params_fold.update({
-                'loader': loader_train,
-                'loader_valid': loader_valid,
-                'loader_test': loader_test,
-                'snapshot_path': snapshot_dir / f'snapshot_fold_{fold_i}.pt',
-                'logger': logger
-            })
-            params_fold.update(deepcopy(template))
-            load_snapshots_to_model(default_path, self.model, params_fold['optimizer'], params_fold['scheduler'])
-
-            trainer_fold = TorchTrainer(self.model, self.device, serial=f'fold_{fold_i}')
-            trainer_fold.fit(**params_fold)
-
-            if fold_i == 0: # Initialize oof and prediction
-                self.oof = np.zeros((len(X), trainer_fold.oof.shape[1]), dtype=np.float)
-                if X_test is not None:
-                    self.pred = np.zeros((len(X_test), trainer_fold.pred.shape[1]), dtype=np.float)
-
-            self.oof[valid_idx] = trainer_fold.oof
-            if X_test is not None:
-                self.pred += trainer_fold.pred / K
-
-            for i, _metric in enumerate(eval_metric):
-                score = _metric(ys['valid'], self.oof[valid_idx])
-                self.scores[i, fold_i] = score
-
-            if verbose >= 0:
-                log_str = f'[CV] Fold {fold_i+1}:'
-                log_str += ''.join(
-                    [f' m{i}={self.scores[i, fold_i]:.5f}' for i in range(len(eval_metric))])
-                print(log_str)
-        
-        log_str = f'[CV] Overall:'
-        log_str += ''.join(
-            [f' m{i}={me:.5f}±{se:.5f}' for i, (me, se) in enumerate(zip(
-                np.mean(self.scores, axis=1),
-                np.std(self.scores, axis=1)/np.sqrt(len(eval_metric))
-            ))]
-        )
-        print(log_str)

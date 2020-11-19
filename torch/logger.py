@@ -1,6 +1,7 @@
 import tensorflow as tf
 tf.compat.v1.disable_eager_execution() # TODO: write new Logger class for TensorFlow v2
 
+
 class Logger(object):
     def __init__(self, log_dir):
         """Create a summary writer logging to log_dir."""
@@ -17,6 +18,7 @@ class Logger(object):
         summary = tf.compat.v1.Summary(value=[tf.compat.v1.Summary.Value(
             tag=tag, simple_value=value) for tag, value in tag_value_pairs])
         self.writer.add_summary(summary, step)
+
 
 class DummyLogger:
     def __init__(self, log_dir):

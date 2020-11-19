@@ -26,12 +26,9 @@
 
 # Directory
 ```
-┣ common
 ┣ compat                        - Old version of kuma_utils for compatibility.
 ┣ visualization
-    ┣ ks_test                   - Kolmogorov-Smirnov test.
-    ┣ explore_dataframe         - Automated EDA (WIP).
-    ┣ plot_calibration_curve    - Plot calibation curve.
+    
 ┣ preprocessing
     ┣ xfeat                     - xfeat modifications.
         ┣ TargetEncoder
@@ -50,21 +47,12 @@
     ┣ AUC
     ┣ Accuracy
     ┣ QWK
-┣ torch                       
-    ┣ datasets
-        ┣ category2embedding    - Calculate optimal embedding dimensions of categorical features.
-        ┣ Numpy2Dataset         - Convert numpy.array to torch.tensor.
-    ┣ logger
-        ┣ Logger                - Export TensorBoard logs.
-    ┣ models
+┣ torch
+    ┣ model_zoo
         ┣ TabularNet            - Simple DNN for tabular data.
-    ┣ snapshot                  - Snapshot I/O.
-    ┣ training
-        ┣ TorchTrainer          - PyTorch Wrapper. See examples below.
-        ┣ TrochCV               - Simple cross validation wrapper for TorchTrainer.
-        ┣ DummyStopper          - Dummy stopper for TorchTrainer.
-        ┣ EarlyStopping         - Early stopping for TorchTrainer.
-        ┣ DummyEvent            - Dummy event for TorchTrainer.
-    ┣ temperature_scaling.py    - Probability calibration for pytorch models.
+    ┣ TorchTrainer              - PyTorch Wrapper.
+    ┣ EarlyStopping             - Early stopping for TorchTrainer (callback).
+    ┣ NoEarlyStoppingNEpochs    - Skip early stopping for the initial n epochs (callback).
+    ┣ TemperatureScale          - Probability calibration for pytorch models.
 
 ```

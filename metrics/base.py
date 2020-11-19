@@ -51,8 +51,7 @@ class MetricTemplate:
     def lgb(self, target, approx):
         return self.__class__.__name__, self._test(target, approx), self.maximize
 
-    def lgbm(self, target, approx): # for compatibility
-        return self.lgb(target, approx)
+    lgbm = lgb # for compatibility
 
     ''' XGBoost '''
     def xgb(self, approx, dtrain):
