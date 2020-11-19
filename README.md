@@ -39,7 +39,8 @@
     ┣ DistTransformer           - Distribution transformer for numerical features. 
 ┣ training
     ┣ Trainer                   - Amazing wrapper for scikit-learn API models.
-    ┣ LGBMLogger                - Logger callback for LightGBM/XGBoost.
+    ┣ CrossValidator            - Amazing cross validation wrapper.
+    ┣ LGBMLogger                - Logger callback for LightGBM/XGBoost/Optuna.
     ┣ StratifiedGroupKFold      - Stratified group k-fold split.
     ┣ optuna                    - optuna modifications.
         ┣ lighgbm               - Optune lightgbm integration with modifiable n_trials.

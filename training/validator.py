@@ -27,8 +27,14 @@ class CrossValidator:
     - Automated parameter tuning using Optuna
     - Most features of Trainer are inherited
     '''
+    
+    SNAPSHOT_ITEMS = [
+        'serial', 'models', 'is_trained',
+        'fold_indices', 'scores', 'best_score', 'outoffold'
+    ]
 
     def __init__(self, model=None, path=None, serial='cv0'):
+        self.serial = serial
         if model is not None:
             self.model = model
             self.models = []
@@ -43,8 +49,6 @@ class CrossValidator:
             self.load(path)
         else:
             raise ValueError('either model or path must be given.')
-        self.serial = serial
-        
 
     def _data_check(self, data):
         assert isinstance(data, (list, tuple))
@@ -75,17 +79,13 @@ class CrossValidator:
               logger=None, n_jobs=-1):
 
         self._data_check(data)
-        self.nfold = folds.get_n_splits()
         self.models = []
 
         if isinstance(logger, (str, Path)):
-            _logger = LGBMLogger(logger, params, fit_params)
-        elif isinstance(logger, LGBMLogger):
-            _logger = logger
+            logger = LGBMLogger(logger, stdout=True, file=True)
         elif logger is None:
-            _logger = None
-        else:
-            raise ValueError('invalid logger.')
+            logger = LGBMLogger(logger, stdout=True, file=False)
+        assert isinstance(logger, LGBMLogger)
 
         _fit_params = fit_params.copy()
         if 'verbose_eval' in fit_params.keys():
@@ -94,9 +94,13 @@ class CrossValidator:
         if callable(getattr(folds, 'split', None)):
             # splitter
             fold_iter = enumerate(folds.split(X=data[0], y=data[1], groups=groups))
+            self.nfold = folds.get_n_splits()
+
         else:
             # index
             fold_iter = enumerate(folds)
+            self.nfold = len(folds)
+
         self.fold_indices = []
         self.scores = []
         self.iterations = []
@@ -105,9 +109,7 @@ class CrossValidator:
 
         for fold_i, (train_idx, valid_idx) in fold_iter:
             
-            print(f'[{self.serial}] Starting fold {fold_i}')
-            if _logger is not None:
-                _logger.write(f'[{self.serial}] Starting fold {fold_i}\n')
+            logger(f'[{self.serial}] Starting fold {fold_i}')
 
             self.fold_indices.append([train_idx, valid_idx])
             
@@ -122,7 +124,7 @@ class CrossValidator:
                 lgbm_n_trials=lgbm_n_trials, 
                 maximize=maximize, eval_metric=eval_metric[0],
                 n_trials=n_trials, timeout=timeout, 
-                logger=_logger, n_jobs=n_jobs
+                logger=logger, n_jobs=n_jobs
             )
 
             best_score = trn.get_best_score()
@@ -138,9 +140,7 @@ class CrossValidator:
                     name_metric = f'monitor{i-1}'
                 log_str += f'{name_metric}={all_metrics[i]:.6f} '
             log_str += f'(iter={best_iter})'
-            print(log_str)
-            if _logger is not None:
-                _logger.write(log_str + '\n')
+            logger(log_str)
             
             if fold_i == 0:
                 _outoffold = trn.smart_predict(valid_data[0])
@@ -156,10 +156,7 @@ class CrossValidator:
         mean_score = np.mean(self.scores)
         se_score = np.std(self.scores)
         self.best_score = [mean_score, se_score]
-        print(f'[{self.serial}] Overall metric: {mean_score:.6f} + {se_score:.6f}')
-        if _logger is not None:
-            _logger.write(
-                f'[{self.serial}] Overall metric: {mean_score:.6f} + {se_score:.6f}\n')
+        logger(f'[{self.serial}] Overall metric: {mean_score:.6f} + {se_score:.6f}')
 
         self.is_trained = True
 
@@ -241,16 +238,15 @@ class CrossValidator:
 
     def save(self, path):
         with open(path, 'wb') as f:
-            pickle.dump(
-                (self.serial, 
-                 self.models, self.is_trained, 
-                 self.fold_indices, self.scores, self.best_score, self.outoffold), f)
+            snapshot = tuple([getattr(self, item)
+                              for item in self.SNAPSHOT_ITEMS])
+            pickle.dump(snapshot, f)
 
     def load(self, path):
         with open(path, 'rb') as f:
-            self.serial, \
-            self.models, self.is_trained, \
-            self.fold_indices, self.scores, self.best_score, self.outoffold = pickle.load(f)
+            snapshot = pickle.load(f)
+        for i, item in enumerate(self.SNAPSHOT_ITEMS):
+            setattr(self, item, snapshot[i])
 
     def __repr__(self):
         desc = f'CrossValidator: {self.serial}\n'

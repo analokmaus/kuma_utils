@@ -7,15 +7,18 @@ def get_time(time_format='%H:%M:%S'):
 
 class LGBMLogger:
 
-    def __init__(self, path, params={}, fit_params={}):
+    def __init__(self, path, stdout=True, file=False):
         self.path = path
-        log_str = f'Logger created at {get_time("%y/%m/%d:%H:%M:%S")}\n'
-        log_str += f'params: {params}\n'
-        log_str += f'fit_params: {fit_params}\n'
-        with open(self.path, 'w') as f:
-            f.write(log_str)
-        
-    def __call__(self, env):
+        self.stdout = stdout
+        self.file = file
+        log_str = f'Logger created at {get_time("%y/%m/%d:%H:%M:%S")}'
+        if self.stdout:
+            print(log_str)
+        if self.file:
+            with open(self.path, 'w') as f:
+                f.write(log_str + '\n')
+      
+    def lgbm(self, env):
         log_str = f'{get_time()} '
         log_str += f'[iter {env.iteration:-5}] '
         for inputs in env.evaluation_result_list:
@@ -29,10 +32,28 @@ class LGBMLogger:
         else:
             log_str += '/ '
         log_str += '\n'
-        with open(self.path, 'a') as f:
-            f.write(log_str)
+        # if self.stdout:
+        #     print(log_str)
+        if self.file:
+            with open(self.path, 'a') as f:
+                f.write(log_str)
 
-    def write(self, text):
-        text = get_time() + ' ' + text
-        with open(self.path, 'a') as f:
-            f.write(text)
+    def optuna(self, study, trial):
+        best_score = study.best_value
+        curr_score = trial.value
+        if curr_score == best_score:
+            log_str = f'{get_time()} '
+            log_str += f'[trial {trial.number:-4}] New best: {best_score:.6f} \n{study.best_params}'
+            if self.stdout:
+                print(log_str)
+            if self.file:
+                with open(self.path, 'a') as f:
+                    f.write(log_str + '\n')
+        
+    def __call__(self, log_str):
+        log_str = get_time() + ' ' + log_str
+        if self.stdout:
+            print(log_str)
+        if self.file:
+            with open(self.path, 'a') as f:
+                f.write(log_str + '\n')
