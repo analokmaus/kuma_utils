@@ -372,7 +372,7 @@ class TorchTrainer:
                         self.eval_metric, epoch, self.global_epoch, self.max_epochs, 
                         early_stopping_target, 
                         loss_train, loss_valid, metric_train, metric_valid, 
-                        monitor_metrics_train, monitor_metrics_valid
+                        monitor_metrics_train, monitor_metrics_valid, self.logger
                     ))
 
                 except SaveModelTrigger:

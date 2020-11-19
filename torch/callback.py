@@ -21,6 +21,7 @@ class CallbackEnv:
     metric_valid: Any = None
     monitor_metrics_train: Any = None
     monitor_metrics_valid: Any = None
+    logger: Any = None
 
 
 class SaveModelTrigger(Exception): pass
@@ -72,6 +73,7 @@ class EarlyStopping(CallbackTemplate):
 
     def __call__(self, env):
         score = env.score
+        env.logger.early_stop_counter = self.state['counter']
         if env.epoch <= self.state['skip_epoch']:
             self.state['best_score'] = score
             raise SaveModelTrigger()
@@ -131,5 +133,6 @@ class TorchLogger:
                 log_str += f"{item} = {val} "
             else:
                 log_str += f"{item} = {val:.6f} "
+        log_str += f'({self.early_stop_counter})'
         if self.stdout:
             print(log_str)
