@@ -160,6 +160,8 @@ class CrossValidator:
 
         self.is_trained = True
 
+    fit = train
+
     def predict(self, X, **kwargs):
         assert self.is_trained
         self.prediction = []
@@ -213,10 +215,6 @@ class CrossValidator:
         approx = self.smart_predict(X, **predict_params)
         if isinstance(approx, list):
             approx = np.stack(approx).mean(0)
-        if len(approx.shape) > 1 and approx.shape[1] == 2:
-            approx = approx[:, 1]
-        else:
-            raise ValueError('calibration curve is only for binary classification.')
         fig = plt.figure(figsize=(size, size*1.5), tight_layout=True)
         gs = fig.add_gridspec(3, 1)
         ax1 = fig.add_subplot(gs[0:2, 0])

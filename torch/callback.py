@@ -14,7 +14,9 @@ class CallbackEnv:
     epoch: Any = None
     global_epoch: Any = None
     max_epoch: Any = None
+    best_epoch: Any = None
     score: Any = None
+    best_score: Any = None
     loss_train: Any = None
     loss_valid: Any = None
     metric_train: Any = None
@@ -87,6 +89,7 @@ class EarlyStopping(CallbackTemplate):
                 self.state['counter'] += 1
             
             if self.state['counter'] >= self.state['patience']:
+                env.logger._callback(env)
                 raise EarlyStoppingTrigger()
         
     def state_dict(self):
@@ -101,8 +104,15 @@ class EarlyStopping(CallbackTemplate):
 
 class TorchLogger:
 
-    def __init__(self, path, stdout=True, file=False):
+    def __init__(self, path, 
+                 log_items=[
+                     'epoch', 'loss_train', 'loss_valid', 'metric_train', 'metric_valid', 
+                     'monitor_metrics_train', 'monitor_metrics_valid', 'earlystop'], 
+                 verbose_eval=1,
+                 stdout=True, file=False):
         self.path = path
+        self.log_items = log_items
+        self.verbose_eval = verbose_eval
         self.stdout = stdout
         self.file = file
         log_str = f'TorchLogger created at {get_time("%y/%m/%d:%H:%M:%S")}'
@@ -121,18 +131,27 @@ class TorchLogger:
                 f.write(log_str + '\n')
 
     def _callback(self, env):
-        log_str = f'[{env.serial}] {get_time()} '
-        log_str += f'[{env.global_epoch:-3}/{env.max_epoch:-3}] '
-        for item in [
-            'loss_train', 'loss_valid', 'metric_train', 
-            'metric_valid', 'monitor_metrics_valid']:
-            val = getattr(env, item)
-            if val is None:
-                continue
-            elif isinstance(val, list):
-                log_str += f"{item} = {val} "
+        if env.epoch % self.verbose_eval != 0:
+            return
+        log_str = ''
+        for item in self.log_items:
+            if item == 'epoch':
+                log_str += f'[{env.global_epoch:-3}/{env.max_epoch:-3}] '
+            elif item == 'earlystop':
+                counter = env.global_epoch-env.best_epoch
+                if counter > 0:
+                    log_str += f'(*{counter})'
             else:
-                log_str += f"{item} = {val:.6f} "
-        log_str += f'({self.early_stop_counter})'
+                val = getattr(env, item)
+                if val is None:
+                    continue
+                elif isinstance(val, list):
+                    metrics_str = '[' + ', '.join([f'{v:.6f}' for v in val]) + ']'
+                    if len(val) > 0:
+                        log_str += f"{item}={metrics_str} "
+                else:
+                    log_str += f"{item}={val:.6f} | "
+        if len(log_str) > 0:
+            log_str = f'{get_time()} ' + log_str
         if self.stdout:
             print(log_str)

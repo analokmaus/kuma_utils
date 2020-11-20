@@ -52,7 +52,11 @@
         ┣ TabularNet            - Simple DNN for tabular data.
     ┣ TorchTrainer              - PyTorch Wrapper.
     ┣ EarlyStopping             - Early stopping for TorchTrainer (callback).
-    ┣ NoEarlyStoppingNEpochs    - Skip early stopping for the initial n epochs (callback).
+    ┣ TorchLogger               - Logger
     ┣ TemperatureScale          - Probability calibration for pytorch models.
 
 ```
+
+# Tutorial
+- [Train and validate scikit-learn API models](examples/Train_and_validate_models.ipynb)
+- [Train PyTorch models](examples/Train_pytorch_models.ipynb)

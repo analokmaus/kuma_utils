@@ -14,7 +14,9 @@ from .snapshot import *
 from .logger import *
 from .temperature_scaling import *
 from .fp16util import network_to_half
-from .callback import CallbackEnv, EarlyStopping, SaveModelTrigger, EarlyStoppingTrigger
+from .callback import (
+    CallbackEnv, TorchLogger,
+    EarlyStopping, SaveModelTrigger, EarlyStoppingTrigger)
 
 try:
     from torchsummary import summary
@@ -43,28 +45,6 @@ Trainer
 class TorchTrainer:
     '''
     Simple Trainer for PyTorch models
-
-    # Usage
-    model = Net()
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=5e-3)
-    NN_FIT_PARAMS = {
-        'loader': loader_train,
-        'loader_valid': loader_valid,
-        'loader_test': loader_test,
-        'criterion': nn.BCEWithLogitsLoss(),
-        'optimizer': optimizer,
-        'scheduler': StepLR(optimizer, step_size=10, gamma=0.9),
-        'num_epochs': 100, 
-        'stopper': EarlyStopping(patience=20, maximize=True),
-        'logger': Logger('results/test/'), 
-        'snapshot_path': Path('results/test/nn_best.pt'),
-        'eval_metric': auc,
-        'info_format': '[epoch] time data loss metric earlystopping',
-        'info_train': False,
-        'info_interval': 3
-    }
-    trainer = TorchTrainer(model, serial='test')
-    trainer.fit(**NN_FIT_PARAMS)
     '''
 
     def __init__(self, 
@@ -250,7 +230,7 @@ class TorchTrainer:
 
     def predict(self, loader, path=None, test_time_augmentations=1, verbose=True):
         if loader is None:
-            print(f'[{self.serial}] No data to predict. Skipping prediction...')
+            self.logger('Skipping prediction...')
             return None
         prediction = []
 
@@ -272,7 +252,7 @@ class TorchTrainer:
             np.save(path, prediction)
 
         if verbose:
-            print(f'[{self.serial}] Prediction done. exported to {path}')
+            self.logger(f'Prediction done. exported to {path}')
 
         return prediction
 
@@ -284,13 +264,10 @@ class TorchTrainer:
             multi_gpu=True, grad_accumulations=1, calibrate_model=False, # Train
             eval_metric=None, monitor_metrics=[], # Evaluation
             test_time_augmentations=1, predict_valid=True, predict_test=True,  # Prediction
-            callbacks=[],  # Train add-ons
+            callbacks=[], 
             # Logger and info
-            logger=None, tb_logger=DummyLogger(''), verbose_eval=1
+            logger=None, tb_logger=DummyLogger('')
         ):
-
-        if eval_metric is None:
-            print(f'[{self.serial}] eval_metric is not set. Inversed criterion will be used instead.')
 
         self.criterion = criterion
         self.optimizer = optimizer
@@ -300,13 +277,27 @@ class TorchTrainer:
         self.logger = logger
         self.tb_logger = tb_logger
         self.callbacks = callbacks
-        self.global_epoch = 0
+        self.best_epoch = 1
+        self.best_score = None
+        self.global_epoch = 1
         self.log = {
             'train': {'loss': [], 'metric': []},
             'valid': {'loss': [], 'metric': []}
         }
         self.outoffold = None
         self.prediction = None
+
+        if self.logger is None:
+            self.logger = TorchLogger('')
+        elif isinstance(self.logger, (str, Path)):
+            self.logger = TorchLogger(self.logger, file=True)
+        elif isinstance(self.logger, TorchLogger):
+            pass
+        else:
+            raise ValueError('Invalid type of logger.')
+
+        if eval_metric is None:
+            self.logger('eval_metric is not set. Inversed criterion will be used instead.')
 
         if snapshot_path is None:
             snapshot_path = Path().cwd()
@@ -325,24 +316,25 @@ class TorchTrainer:
 
         self.model.to(self.device)
         if resume:
-            load_snapshots_to_model(
+            load_snapshots(
                 snapshot_path, self.global_epoch, self.model, self.optimizer, self.scheduler,
                 self.callbacks, device=self.device)
-            if verbose:
-                print(
-                    f'[{self.serial}] {snapshot_path} is loaded. Continuing from epoch {self.global_epoch}.')
+            self.logger(f'{snapshot_path} is loaded. Continuing from epoch {self.global_epoch}.')
         if self.is_fp16:
             self.model_to_fp16()
         if multi_gpu:
             self.model_to_parallel()
 
-        self.max_epochs = self.global_epoch + num_epochs
+        self.max_epochs = self.global_epoch + num_epochs - 1
         loss_valid, metric_valid = np.inf, -np.inf
 
         for epoch in range(num_epochs):
             start_time = time.time()
             if self.scheduler.__class__.__name__ == 'ReduceLROnPlateau':
-                self.scheduler.step(loss_valid)
+                if loss_valid is None: # no validation set
+                    self.scheduler.step(np.inf)
+                else:
+                    self.scheduler.step(loss_valid)
             else:
                 self.scheduler.step()
 
@@ -362,28 +354,32 @@ class TorchTrainer:
                 
                 early_stopping_target = metric_valid
 
-            # TODO: Callback a posteriori
             ''' Callbacks '''
             for func in self.callbacks + [self.logger._callback]:
                 try:
                     func(CallbackEnv(
                         self.serial, 
-                        self.model, self.optimizer, self.scheduler, self.criterion,
-                        self.eval_metric, epoch, self.global_epoch, self.max_epochs, 
-                        early_stopping_target, 
+                        self.model, self.optimizer, self.scheduler, 
+                        self.criterion, self.eval_metric, 
+                        epoch, self.global_epoch, self.max_epochs, self.best_epoch, 
+                        early_stopping_target, self.best_score, 
                         loss_train, loss_valid, metric_train, metric_valid, 
-                        monitor_metrics_train, monitor_metrics_valid, self.logger
+                        monitor_metrics_train, monitor_metrics_valid, 
+                        self.logger
                     ))
 
-                except SaveModelTrigger:
+                except SaveModelTrigger as e:
                     ''' Save model '''
+                    self.best_epoch = self.global_epoch
+                    self.best_score = early_stopping_target
                     save_snapshots(snapshot_path,
                         self.global_epoch, self.model,
                         self.optimizer, self.scheduler, self.callbacks)
 
                 except EarlyStoppingTrigger:
                     ''' Early stop '''
-                    print('earlkystop')
+                    self.logger('Training stopped by overfit detector.')
+                    self.logger(f'Best epoch is [{self.best_epoch}], best score is [{self.best_score:.6f}].')
                     load_snapshots(
                         str(snapshot_path), model=self.model, optimizer=self.optimizer)
 
@@ -415,8 +411,28 @@ class TorchTrainer:
             break
 
         else:  # Not stopped by overfit detector
-            print('Not stopped')
-            pass
+            self.logger(
+                f'Best epoch is [{self.best_epoch}], best score is [{self.best_score}].')
+            load_snapshots(
+                str(snapshot_path), model=self.model, optimizer=self.optimizer)
+
+            if calibrate_model:
+                if loader_valid is None:
+                    raise ValueError(
+                        'loader_valid is necessary for calibration.')
+                else:
+                    self.calibrate_model(loader_valid)
+
+            if predict_valid:
+                if loader_valid is None:
+                    self.outoffold = self.predict(
+                        loader, test_time_augmentations=test_time_augmentations)
+                else:
+                    self.outoffold = self.predict(
+                        loader_valid, test_time_augmentations=test_time_augmentations)
+            if predict_test:
+                self.prediction = self.predict(
+                    loader_test, test_time_augmentations=test_time_augmentations)
     
     fit = train # for compatibility
 

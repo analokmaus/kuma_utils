@@ -447,6 +447,8 @@ class Trainer:
         if calibration:
             pass
 
+    fit = train
+
     def cv(self,
            # Dataset
            data, cat_features=None, groups=None, folds=KFold(n_splits=5),
@@ -679,7 +681,11 @@ class Trainer:
         is_classifier = self.model_name[-10:] == 'Classifier' or \
             self.model_name in ['SVC', 'LogisticRegression']
         if is_classifier and self.n_classes == 2:
-            return self.predict_proba(X, **kwargs)[:, 1]
+            prediction = self.predict_proba(X, **kwargs)
+            if isinstance(prediction, list):
+                return [p[:, 1] for p in prediction]
+            else:
+                return prediction[:, 1]
         else:
             return self.predict(X, **kwargs)
 
@@ -820,12 +826,6 @@ class Trainer:
     def plot_calibartion_curve(self, data, predict_params={}, size=4, save_to=None):
         X, y = data[0], data[1]
         approx = self.smart_predict(X, **predict_params)
-        if isinstance(approx, list):
-            approx = np.stack(approx).mean(0)
-        if len(approx.shape) > 1 and approx.shape[1] == 2:
-            approx = approx[:, 1]
-        else:
-            raise ValueError('calibration curve is only for binary classification.')
         fig = plt.figure(figsize=(size, size*1.5), tight_layout=True)
         gs = fig.add_gridspec(3, 1)
         ax1 = fig.add_subplot(gs[0:2, 0])

@@ -1,3 +1,3 @@
-from .training import TorchTrainer
-from .stopper import *
+from .trainer import TorchTrainer
 from .callback import *
+from .snapshot import * 
