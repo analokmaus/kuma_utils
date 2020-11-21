@@ -147,7 +147,7 @@ class CrossValidator:
                 self.outoffold = np.empty((data[0].shape[0], *_outoffold.shape[1:]), dtype=np.float16)
                 self.outoffold[valid_idx] = _outoffold
             else:
-                self.outoffold = trn.smart_predict(valid_data[0])
+                self.outoffold[valid_idx] = trn.smart_predict(valid_data[0])
 
             self.scores.append(best_score)
             self.iterations.append(best_iter)
