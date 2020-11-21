@@ -136,7 +136,7 @@ class TorchLogger:
         log_str = ''
         for item in self.log_items:
             if item == 'epoch':
-                log_str += f'[{env.global_epoch:-3}/{env.max_epoch:-3}] '
+                log_str += f'[Epoch {env.global_epoch:-3}/{env.max_epoch:-3}] '
             elif item == 'earlystop':
                 counter = env.global_epoch-env.best_epoch
                 if counter > 0:

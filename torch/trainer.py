@@ -10,7 +10,6 @@ import pandas as pd
 
 import torch
 import torch.utils.data as D
-from .snapshot import *
 from .logger import *
 from .temperature_scaling import *
 from .fp16util import network_to_half
@@ -66,22 +65,20 @@ class TorchTrainer:
         self.model = model
         self.argument_index_to_model = [0]
         self.argument_index_to_metric = None
-        print(f'[{self.serial}] On {self.device}.')
 
     def model_to_fp16(self):
         if APEX_FLAG:
             self.model, self.optimizer = amp.initialize(
                 self.model, self.optimizer, 
                 opt_level=self.apex_opt_level, verbosity=0)
-            print(f'[{self.serial}] Model, Optimizer -> fp16 (apex)')
+            self.logger(f'[{self.serial}] Model, Optimizer -> fp16 (apex)')
         else:
             self.model = network_to_half(self.model)
-            print(f'[{self.serial}] Model -> fp16 (simple)')
+            self.logger(f'[{self.serial}] Model -> fp16 (simple)')
         
     def model_to_parallel(self):
         if self.is_xla:
-            print(
-                f'[{self.serial}] Parallel training for xla devices is WIP.')
+            raise NotImplementedError('Parallel training for xla devices is WIP.')
 
         if torch.cuda.device_count() > 1:
             all_devices = list(range(torch.cuda.device_count()))
@@ -90,7 +87,7 @@ class TorchTrainer:
             else:
                 self.model = nn.parallel.DataParallel(self.model)
 
-            print(f'[{self.serial}] {torch.cuda.device_count()}({all_devices}) gpus found.')
+            self.logger(f'{torch.cuda.device_count()}({all_devices}) gpus found.')
 
     def train_loop(self, loader, grad_accumulations=1, logger_interval=1):
         loss_total = 0.0
@@ -256,6 +253,36 @@ class TorchTrainer:
 
         return prediction
 
+    def save_snapshot(self, path):
+        if isinstance(self.model, torch.nn.DataParallel):
+            module = self.model.module
+        else:
+            module = self.model
+
+        torch.save({
+            'global_epoch': self.global_epoch,
+            'model': module.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'scheduler': self.scheduler.state_dict(),
+            'callbacks': [func.state_dict() for func in self.callbacks],
+        }, path)
+
+    def load_snapshot(self, path, 
+                      load_epoch=True, load_scheduler=True, load_callbacks=True):
+        checkpoint = torch.load(path, map_location=self.device)
+        if isinstance(self.model, torch.nn.DataParallel):
+            self.model.module.load_state_dict(checkpoint['model'])
+        else:
+            self.model.load_state_dict(checkpoint['model'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        if load_scheduler:
+            self.scheduler.load_state_dict(checkpoint['scheduler'])
+        if load_callbacks:
+            for i in range(len(self.callbacks)):
+                self.callbacks[i].load_state_dict(checkpoint['callbacks'][i])
+        if load_epoch:
+            self.global_epoch = checkpoint['global_epoch']
+
     def train(self,
             # Essential
             criterion, optimizer, scheduler, 
@@ -316,14 +343,17 @@ class TorchTrainer:
 
         self.model.to(self.device)
         if resume:
-            load_snapshots(
-                snapshot_path, self.global_epoch, self.model, self.optimizer, self.scheduler,
-                self.callbacks, device=self.device)
+            self.load_snapshot(snapshot_path)
             self.logger(f'{snapshot_path} is loaded. Continuing from epoch {self.global_epoch}.')
+        else:
+            if snapshot_path.exists():
+                snapshot_path.unlink()
         if self.is_fp16:
             self.model_to_fp16()
         if multi_gpu:
             self.model_to_parallel()
+        
+        self.logger(f'Model is on {self.device}')
 
         self.max_epochs = self.global_epoch + num_epochs - 1
         loss_valid, metric_valid = np.inf, -np.inf
@@ -368,20 +398,17 @@ class TorchTrainer:
                         self.logger
                     ))
 
-                except SaveModelTrigger as e:
+                except SaveModelTrigger:
                     ''' Save model '''
                     self.best_epoch = self.global_epoch
                     self.best_score = early_stopping_target
-                    save_snapshots(snapshot_path,
-                        self.global_epoch, self.model,
-                        self.optimizer, self.scheduler, self.callbacks)
+                    self.save_snapshot(snapshot_path)
 
                 except EarlyStoppingTrigger:
                     ''' Early stop '''
                     self.logger('Training stopped by overfit detector.')
                     self.logger(f'Best epoch is [{self.best_epoch}], best score is [{self.best_score:.6f}].')
-                    load_snapshots(
-                        str(snapshot_path), model=self.model, optimizer=self.optimizer)
+                    self.load_snapshot(str(snapshot_path), load_epoch=False, load_scheduler=False, load_callbacks=False)
 
                     if calibrate_model:
                         if loader_valid is None:
@@ -402,19 +429,21 @@ class TorchTrainer:
                     break
 
             else:
-                '''
-                No early stopping
-                '''
+                ''' Not stopped '''
                 self.global_epoch += 1
                 continue
 
             break
 
-        else:  # Not stopped by overfit detector
+        else:
+            ''' No early stop till the end '''
             self.logger(
                 f'Best epoch is [{self.best_epoch}], best score is [{self.best_score}].')
-            load_snapshots(
-                str(snapshot_path), model=self.model, optimizer=self.optimizer)
+            if snapshot_path.exists():
+                self.load_snapshot(
+                    str(snapshot_path), load_epoch=False, load_scheduler=False, load_callbacks=False)
+            else:
+                self.save_snapshot(snapshot_path)
 
             if calibrate_model:
                 if loader_valid is None:
