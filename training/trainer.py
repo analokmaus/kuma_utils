@@ -90,7 +90,7 @@ class Trainer:
     '''
 
     SNAPSHOT_ITEMS = [
-        'serial', 'model', 'is_trained', 'best_iteration', 'best_score',
+        'serial', 'model', 'model_name', 'is_trained', 'best_iteration', 'best_score',
         'evals_result', 'feature_names', 'n_features', 'n_classes'
     ]
 
@@ -128,8 +128,10 @@ class Trainer:
                 if isinstance(params[key], (list, tuple)):
                     print('setting multiple metrics are not recommended.')
                     main_metric = params[key][0]
-                else:
+                elif isinstance(params[key], str):
                     main_metric = params[key]
+                else:
+                    main_metric = params[key].__class__.__name__
                 if not main_metric in DIRECTION['maximize'] + DIRECTION['minimize']:
                     print(f'specify optimization direction for metric {main_metric}.')
                 _maximize = main_metric in DIRECTION['maximize']
