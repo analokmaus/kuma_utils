@@ -12,8 +12,12 @@
 ```
 
 # Environment
+Create a new environment and:
+
 `pip install -r reqirements.txt`
 ## Optional requirements
+### PyTorch
+Follow [official instructions](https://pytorch.org/get-started/locally/).
 ### xfeat
 `pip install -q https://github.com/pfnet-research/xfeat/archive/master.zip`
 ### Category Encoders
@@ -26,7 +30,6 @@
 
 # Directory
 ```
-┣ compat                        - Old version of kuma_utils for compatibility.
 ┣ visualization
     
 ┣ preprocessing
