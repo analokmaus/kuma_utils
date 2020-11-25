@@ -825,7 +825,7 @@ class Trainer:
             plt.savefig(save_to)
         plt.show()
 
-    def plot_calibartion_curve(self, data, predict_params={}, size=4, save_to=None):
+    def plot_calibration_curve(self, data, predict_params={}, size=4, save_to=None):
         X, y = data[0], data[1]
         approx = self.smart_predict(X, **predict_params)
         fig = plt.figure(figsize=(size, size*1.5), tight_layout=True)

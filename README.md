@@ -34,6 +34,7 @@
         ┣ TargetEncoder
         ┣ Pipeline
     ┣ DistTransformer           - Distribution transformer for numerical features. 
+    ┣ LGBMImputer               - Regression imputer for missing values using LightGBM.
 ┣ training
     ┣ Trainer                   - Amazing wrapper for scikit-learn API models.
     ┣ CrossValidator            - Amazing cross validation wrapper.
@@ -58,5 +59,6 @@
 ```
 
 # Tutorial
+- [Data preprocessing](examples/Data_preprocessing.ipynb)
 - [Train and validate scikit-learn API models](examples/Train_and_validate_models.ipynb)
 - [Train PyTorch models](examples/Train_pytorch_models.ipynb)
