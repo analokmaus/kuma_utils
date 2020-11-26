@@ -87,7 +87,7 @@ kuma_utils work with both apex Python-only build and apex with CUDA/C++ extensio
 ```
 
 # Tutorial
-- [Exploratory data analysis](examples/Data_preprocessing.ipynb)
+- [Exploratory data analysis](examples/Exploratory_data_analysis.ipynb)
 - [Data preprocessing](examples/Data_preprocessing.ipynb)
 - [Train and validate scikit-learn API models](examples/Train_and_validate_models.ipynb)
 - [Train PyTorch models](examples/Train_pytorch_models.ipynb)
