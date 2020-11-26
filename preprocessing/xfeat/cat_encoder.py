@@ -1,5 +1,7 @@
 '''
-xfeat (https://github.com/pfnet-research/xfeat) Mod
+xfeat
+https://github.com/pfnet-research/xfeat
+Modified
 '''
 
 import numpy as np

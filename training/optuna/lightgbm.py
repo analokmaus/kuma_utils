@@ -1,3 +1,9 @@
+'''
+optuna LightGBM integration 
+https://github.com/optuna/optuna/blob/8ef763023e5ad858284566b3de2fa5eca7fd19b2/optuna/integration/_lightgbm_tuner/optimize.py
+Modified
+'''
+
 import abc
 import copy
 import json

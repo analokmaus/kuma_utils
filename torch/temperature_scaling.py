@@ -1,6 +1,7 @@
 '''
-Based on:
+Temperature Scaling
 https://github.com/gpleiss/temperature_scaling
+Modified
 '''
 import torch
 from torch import nn, optim

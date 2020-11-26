@@ -1,4 +1,5 @@
 import time
+from pprint import pprint, pformat
 
 
 def get_time(time_format='%H:%M:%S'):
@@ -43,7 +44,8 @@ class LGBMLogger:
         curr_score = trial.value
         if curr_score == best_score:
             log_str = f'{get_time()} '
-            log_str += f'[trial {trial.number:-4}] New best: {best_score:.6f} \n{study.best_params}'
+            log_str += f'[trial {trial.number:-4}] New best: {best_score:.6f} \n'
+            log_str += f'{pformat(study.best_params, compact=True, indent=2)}'
             if self.stdout:
                 print(log_str)
             if self.file:

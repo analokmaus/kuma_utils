@@ -1,5 +1,7 @@
 '''
+fastai
 https://github.com/fastai/imagenet-fast/blob/master/cifar10/fp16util.py
+Modified
 '''
 
 import torch

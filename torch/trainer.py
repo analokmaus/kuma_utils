@@ -20,7 +20,7 @@ from .callback import (
 try:
     from torchsummary import summary
 except ModuleNotFoundError:
-    print('torch summary not found.')
+    print('torchsummary not found.')
 
 try:
     import torch_xla

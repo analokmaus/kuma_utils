@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
-from tqdm import tqdm
 
 from .utils import analyze_column
 
@@ -11,9 +10,10 @@ class LGBMImputer:
     Regression imputer using LightGBM
     '''
 
-    def __init__(self, cat_features=[], n_iter=100):
+    def __init__(self, cat_features=[], n_iter=100, verbose=False):
         self.n_iter = n_iter
         self.cat_features = cat_features
+        self.verbose = verbose
         self.n_features = None
         self.feature_names = None
         self.feature_with_missing = None
@@ -31,7 +31,7 @@ class LGBMImputer:
         self.feature_with_missing = [
             col for col in self.feature_names if X[col].isnull().sum() > 0]
 
-        for icol, col in enumerate(tqdm(self.feature_with_missing)):
+        for icol, col in enumerate(self.feature_with_missing):
             if icol in self.cat_features:
                 nuni = X[col].dropna().nunique()
                 if nuni == 2:
@@ -50,7 +50,7 @@ class LGBMImputer:
                     }
                 else:
                     nuni = X[col].dropna().nunique()
-                    if uni == 2:
+                    if nuni == 2:
                         params = {
                             'objective': 'binary'
                         }
@@ -78,6 +78,7 @@ class LGBMImputer:
             early_stopping_rounds = int(self.n_iter/10)
             model = lgb.train(
                 params, dtrain, valid_sets=[dtrain],
+                num_boost_round=self.n_iter,
                 early_stopping_rounds=early_stopping_rounds,
                 verbose_eval=0,
             )
@@ -85,6 +86,9 @@ class LGBMImputer:
             self.imputers[col] = model
             self.offsets[col] = y_offset
             self.objectives[col] = params['objective']
+            if self.verbose:
+                print(
+                    f'{col}:\t{self.objectives[col]}...iter{model.best_iteration}/{self.n_iter}')
 
     def transform(self, X):
         output_X = X.copy()
@@ -119,7 +123,7 @@ class LGBMImputer:
             X = pd.DataFrame(X, columns=self.feature_names)
         self.feature_with_missing = [col for col in self.feature_names if X[col].isnull().sum() > 0]
 
-        for icol, col in enumerate(tqdm(self.feature_with_missing)):
+        for icol, col in enumerate(self.feature_with_missing):
             if icol in self.cat_features:
                 nuni = X[col].dropna().nunique()
                 if nuni == 2:
@@ -166,6 +170,7 @@ class LGBMImputer:
             early_stopping_rounds = int(self.n_iter/10)
             model = lgb.train(
                 params, dtrain, valid_sets=[dtrain], 
+                num_boost_round=self.n_iter,
                 early_stopping_rounds=early_stopping_rounds,
                 verbose_eval=0,
             )
@@ -182,5 +187,7 @@ class LGBMImputer:
             self.imputers[col] = model
             self.offsets[col] = y_offset
             self.objectives[col] = params['objective']
+            if self.verbose:
+                print(f'{col}:\t{self.objectives[col]}...iter{model.best_iteration}/{self.n_iter}')
         
         return output_X

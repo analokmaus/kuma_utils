@@ -1,4 +1,4 @@
-# Kuma-san's Toolkit
+# Kuma-san's Toolkit 2020
 
 ```
 　 　 　┼╂┼
@@ -10,50 +10,75 @@
 / ＿＿   ヽノ /´>  )
 (＿＿＿）    / (_／
 ```
+## Usage
+Copy all the files to your working directory via:
+
+`git clone https://github.com/analokmaus/kuma_utils.git`
+
+See example notebooks below.
+
+For compatibility, old version of kuma_utils can be found in branch `2019`. 
+Checkout to the branch via 
+
+`git checkout 2019` 
+
+as needed.
+
+## WIP
+1. Distributed Data Parallel (DDP) support for TorchTrainer.
 
 # Environment
 Create a new environment and:
 
 `pip install -r reqirements.txt`
 ## Optional requirements
-### PyTorch
-Follow [official instructions](https://pytorch.org/get-started/locally/).
 ### xfeat
 `pip install -q https://github.com/pfnet-research/xfeat/archive/master.zip`
 ### Category Encoders
 `pip install category_encoders`
-### CuPy
-`WIP`
+### **PyTorch**
+Follow [official instructions](https://pytorch.org/get-started/locally/).
+### Pytorch/XLA
+Follow [official instructions](https://github.com/pytorch/xla).
 ### NVIDIA apex
-`WIP`
+Follow [official instructions](https://github.com/NVIDIA/apex). 
+kuma_utils work with both apex Python-only build and apex with CUDA/C++ extensions.
+### pytorch-summary
+`pip install torchsummary`
+### japanize-matplotlib
+`pip install japanize-matplotlib`
 
 
 # Directory
 ```
 ┣ visualization
-    
+┃   ┣ explore_data              - Simple exploratory data analysis.
+┃
 ┣ preprocessing
-    ┣ xfeat                     - xfeat modifications.
-        ┣ TargetEncoder
-        ┣ Pipeline
-    ┣ DistTransformer           - Distribution transformer for numerical features. 
-    ┣ LGBMImputer               - Regression imputer for missing values using LightGBM.
+┃   ┣ xfeat                     - xfeat modifications.
+┃   ┃   ┣ TargetEncoder
+┃   ┃   ┣ Pipeline
+┃   ┣ DistTransformer           - Distribution transformer for numerical features. 
+┃   ┣ LGBMImputer               - Regression imputer for missing values using LightGBM.
+┃
 ┣ training
-    ┣ Trainer                   - Amazing wrapper for scikit-learn API models.
-    ┣ CrossValidator            - Amazing cross validation wrapper.
-    ┣ LGBMLogger                - Logger callback for LightGBM/XGBoost/Optuna.
-    ┣ StratifiedGroupKFold      - Stratified group k-fold split.
-    ┣ optuna                    - optuna modifications.
-        ┣ lighgbm               - Optune lightgbm integration with modifiable n_trials.
+┃   ┣ Trainer                   - Amazing wrapper for scikit-learn API models.
+┃   ┣ CrossValidator            - Amazing cross validation wrapper.
+┃   ┣ LGBMLogger                - Logger callback for LightGBM/XGBoost/Optuna.
+┃   ┣ StratifiedGroupKFold      - Stratified group k-fold split.
+┃   ┣ optuna                    - optuna modifications.
+┃       ┣ lighgbm               - Optune lightgbm integration with modifiable n_trials.
+┃
 ┣ metrics                       - Universal metrics
-    ┣ SeWithFixedSp             - Sensitivity with fixed specificity.
-    ┣ RMSE
-    ┣ AUC
-    ┣ Accuracy
-    ┣ QWK
+┃   ┣ SeWithFixedSp             - Sensitivity with fixed specificity.
+┃   ┣ RMSE
+┃   ┣ AUC
+┃   ┣ Accuracy
+┃   ┣ QWK
+┃
 ┣ torch
     ┣ model_zoo
-        ┣ TabularNet            - Simple DNN for tabular data.
+    ┃   ┣ TabularNet            - Simple DNN for tabular data.
     ┣ TorchTrainer              - PyTorch Wrapper.
     ┣ EarlyStopping             - Early stopping for TorchTrainer (callback).
     ┣ TorchLogger               - Logger
@@ -62,6 +87,11 @@ Follow [official instructions](https://pytorch.org/get-started/locally/).
 ```
 
 # Tutorial
+- [Exploratory data analysis](examples/Data_preprocessing.ipynb)
 - [Data preprocessing](examples/Data_preprocessing.ipynb)
 - [Train and validate scikit-learn API models](examples/Train_and_validate_models.ipynb)
 - [Train PyTorch models](examples/Train_pytorch_models.ipynb)
+
+
+# License
+The source code in this repository is released under the MIT license.
