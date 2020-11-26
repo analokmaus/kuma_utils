@@ -9,7 +9,7 @@ class MetricTemplate:
     # Usage
     general:    Metric()(target, approx)
     catboost:   eval_metric=Metric()
-    lightgbm:   eval_metric=Metric().lgb
+    lightgbm:   metric='Metric_Name', feval=Metric().lgb
     pytorch:    Metric().torch(output, labels)
     '''
 
@@ -48,7 +48,8 @@ class MetricTemplate:
         return error_sum, weight_sum
 
     ''' LightGBM '''
-    def lgb(self, target, approx):
+    def lgb(self, approx, data):
+        target = data.get_label()
         return self.__class__.__name__, self._test(target, approx), self.maximize
 
     lgbm = lgb # for compatibility
