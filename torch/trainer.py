@@ -10,8 +10,8 @@ import pandas as pd
 
 import torch
 import torch.utils.data as D
-from .logger import *
-from .temperature_scaling import *
+from .logger import DummyTensorBoardLogger
+from .temperature_scaling import TemperatureScaler
 from .fp16util import network_to_half
 from .callback import (
     CallbackEnv, TorchLogger,
@@ -285,15 +285,15 @@ class TorchTrainer:
 
     def train(self,
             # Essential
-            criterion, optimizer, scheduler, 
-            loader, num_epochs, loader_valid=None, loader_test=None,
+            criterion, optimizer, scheduler, loader, num_epochs, 
+            loader_valid=None, loader_test=None,
             snapshot_path=None, resume=False,  # Snapshot
             multi_gpu=True, grad_accumulations=1, calibrate_model=False, # Train
             eval_metric=None, monitor_metrics=[], # Evaluation
             test_time_augmentations=1, predict_valid=True, predict_test=True,  # Prediction
             callbacks=[], 
             # Logger and info
-            logger=None, tb_logger=DummyLogger('')
+            logger=None, tb_logger=DummyTensorBoardLogger()
         ):
 
         self.criterion = criterion

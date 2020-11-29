@@ -82,7 +82,7 @@ kuma_utils work with both apex Python-only build and apex with CUDA/C++ extensio
     ┣ TorchTrainer              - PyTorch Wrapper.
     ┣ EarlyStopping             - Early stopping for TorchTrainer (callback).
     ┣ TorchLogger               - Logger
-    ┣ TemperatureScale          - Probability calibration for pytorch models.
+    ┣ TemperatureScaler         - Probability calibration for pytorch models.
 
 ```
 

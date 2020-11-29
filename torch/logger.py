@@ -20,8 +20,8 @@ class TensorBoardLogger(object):
         self.writer.add_summary(summary, step)
 
 
-class DummyLogger:
-    def __init__(self, log_dir):
+class DummyTensorBoardLogger:
+    def __init__(self, log_dir=''):
         pass
 
     def scalar_summary(self, tag, value, step):
