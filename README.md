@@ -67,7 +67,7 @@ kuma_utils work with both apex Python-only build and apex with CUDA/C++ extensio
 ┃   ┣ LGBMLogger                - Logger callback for LightGBM/XGBoost/Optuna.
 ┃   ┣ StratifiedGroupKFold      - Stratified group k-fold split.
 ┃   ┣ optuna                    - optuna modifications.
-┃       ┣ lighgbm               - Optune lightgbm integration with modifiable n_trials.
+┃       ┣ lightgbm               - Optune lightgbm integration with modifiable n_trials.
 ┃
 ┣ metrics                       - Universal metrics
 ┃   ┣ SeWithFixedSp             - Sensitivity with fixed specificity.
