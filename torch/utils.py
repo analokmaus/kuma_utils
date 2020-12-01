@@ -1,20 +1,23 @@
+import os
 import torch
+import torch.distributed as dist
 
 
-def scan_requires_grad(model):
-    frozen = 0
-    unfrozen = 0
-    for i, param in enumerate(model.parameters()):
-        if param.requires_grad:
-            unfrozen += 1
-        else:
-            frozen += 1
-    return frozen, unfrozen
+def freeze_module(module):
+    for i, param in enumerate(module.parameters()):
+        param.requires_grad = False
 
 
-def set_requires_grad(model, requires_grad=True, verbose=True):
-    for i, param in enumerate(model.parameters()):
-        param.requires_grad = requires_grad
-    if verbose:
-        frozen, unfrozen = scan_requires_grad(model)
-        print(f'{frozen}/{frozen+unfrozen} params is frozen.')
+def ddp_setup(rank, world_size):
+    if sys.platform == 'win32':
+        raise NotImplementedError('DDP for win32 is not implemented')
+    else:
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '12355'
+
+        # initialize the process group
+        dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+
+def ddp_cleanup():
+    dist.destroy_process_group()

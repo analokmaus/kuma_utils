@@ -1,2 +1,3 @@
 from .trainer import TorchTrainer
-from .callback import *
+from .callbacks import *
+from .tensorboard import *
