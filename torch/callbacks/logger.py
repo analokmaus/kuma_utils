@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 
 
 def get_time(time_format='%H:%M:%S'):
@@ -10,7 +11,7 @@ class TorchLogger:
     def __init__(self, path,
                  log_items=[
                      'epoch', 'train_loss', 'valid_loss', 'train_metric', 'valid_metric',
-                     'train_monitor', 'valid_monitor', 'patience'],
+                     'train_monitor', 'valid_monitor', 'learning_rate', 'patience'],
                  verbose_eval=1,
                  stdout=True, file=False):
         self.path = path
@@ -51,10 +52,13 @@ class TorchLogger:
                     metrics_str = '[' + \
                         ', '.join([f'{v:.6f}' for v in val]) + ']'
                     if len(val) > 0:
-                        log_str += f"{item}={metrics_str} "
+                        log_str += f"{item}={metrics_str} | "
                 else:
                     log_str += f"{item}={val:.6f} | "
         if len(log_str) > 0:
             log_str = f'{get_time()} ' + log_str
         if self.stdout:
             print(log_str)
+        if self.file:
+            with open(self.path, 'a') as f:
+                f.write(log_str + '\n')

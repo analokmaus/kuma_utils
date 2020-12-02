@@ -79,6 +79,10 @@ kuma_utils work with both apex Python-only build and apex with CUDA/C++ extensio
 ┣ torch
     ┣ model_zoo
     ┃   ┣ TabularNet            - Simple DNN for tabular data.
+    ┣ lr_scheduler
+    ┃   ┣ ManualScheduler       
+    ┃   ┣ CyclicCosAnnealingLR  
+    ┃   ┣ CyclicLinearLR        
     ┣ TorchTrainer              - PyTorch Wrapper.
     ┣ EarlyStopping             - Early stopping for TorchTrainer (callback).
     ┣ TorchLogger               - Logger
