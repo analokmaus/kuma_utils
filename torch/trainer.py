@@ -38,7 +38,6 @@ except ModuleNotFoundError:
     except ModuleNotFoundError:
         APEX = False
         AMP = False
-        print('No mixed precision training backend available.')
 
 
 class TorchTrainer:
@@ -46,6 +45,9 @@ class TorchTrainer:
     Simple Trainer for PyTorch models
     
     This is something similar to PyTorch Lightning, but this works with vanilla PyTorch modules.
+
+    TODO:
+    - specify xla device list
     '''
 
     def __init__(self, 
@@ -77,6 +79,7 @@ class TorchTrainer:
             else:
                 device = torch.device('cpu')
                 device_ids = None
+            self.on_xla = False
 
         elif isinstance(device, str):
             if 'xla' in device:
@@ -111,6 +114,7 @@ class TorchTrainer:
                 device_ids = device
             else:
                 raise ValueError('Cuda is not availbale.')
+            self.on_xla = False
         
         return device, device_ids
 
@@ -475,7 +479,6 @@ class TorchTrainer:
             self.monitor_metrics = [self.monitor_metrics]
 
         ''' Configure model '''
-        assert self.fp16 == AMP
         self.model.to(self.device)
         if resume:
             self.load_snapshot(snapshot_path, load_callbacks=~ignore_callbacks)
