@@ -15,29 +15,30 @@ import torch.multiprocessing as mp
 from .utils import * 
 from .tensorboard import DummyTensorBoardLogger
 from .temperature_scaling import TemperatureScaler
-from .fp16util import network_to_half
 from .callbacks import (
     CallbackEnv, TorchLogger, EarlyStopping)
 from .parallel import DDP_TMP_CHECKPOINT, _train_one_epoch_ddp
 
 try:
-    from torchsummary import summary
-except ModuleNotFoundError:
-    print('torchsummary not found.')
-
-try:
     import torch_xla
     import torch_xla.core.xla_model as xm
+    XLA = True
 except ModuleNotFoundError:
-    print('torch_xla not found.')
+    XLA = False
 
 try:
-    from apex import amp
-    from apex.parallel import DistributedDataParallel as ampDDP
-    APEX_FLAG = True
+    from torch.cuda import amp
+    AMP = True
+    APEX = False
 except ModuleNotFoundError:
-    print('nvidia apex not found.')
-    APEX_FLAG = False
+    try:
+        from apex import amp
+        APEX = True
+        AMP = True
+    except ModuleNotFoundError:
+        APEX = False
+        AMP = False
+        print('No mixed precision training backend available.')
 
 
 class TorchTrainer:
@@ -48,18 +49,11 @@ class TorchTrainer:
     '''
 
     def __init__(self, 
-                 model, device=None, fp16=False, xla=False, serial='Trainer'):
+                 model, device=None, serial='Trainer'):
         
         self.serial = serial
-        self.device = device
-        self.on_xla = xla
+        self.device, self.device_ids = self._get_device(device)
         self.model = model
-
-        if self.device is None:
-            if self.on_xla:
-                self.device = xm.xla_device()
-            else:
-                self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         # Some hidden params
         self.apex_opt_level = 'O1'
@@ -68,33 +62,83 @@ class TorchTrainer:
         self.argument_to_criterion = None
         self.argument_to_metric = None
         self.scheduler_target = None
+        self.amp_backend = 'AMP'
+        self.progress_bar = False
+
+    def _get_device(self, device):
+        if device is None:
+            if torch.cuda.is_available():
+                device = torch.device('cuda')
+                device_count = torch.cuda.device_count()
+                if device_count > 1:
+                    device_ids = list(range(device_count))
+                else:
+                    device_ids = [0]
+            else:
+                device = torch.device('cpu')
+                device_ids = None
+
+        elif isinstance(device, str):
+            if 'xla' in device:
+                assert XLA
+                self.on_xla = True
+                if device in xm.get_xla_supported_devices():
+                    device = xm.xla_device(device.split(':')[-1])
+                else:
+                    device = xm.xla_device()
+            else:
+                self.on_xla = False
+                device = torch.device(device)
+
+            if device.type == 'cuda':
+                assert torch.cuda.is_available()
+                if device.index is None:
+                    device_count = torch.cuda.device_count()
+                    if device_count > 1:
+                        device_ids = list(range(device_count))
+                    else:
+                        device_ids = [0]
+                else:
+                    device_ids = [device.index]
+            elif device.type == 'xla':
+                device_ids = [device.index]
+            elif device.type == 'cpu':
+                device_ids = None
+
+        elif isinstance(device, (list, tuple)):
+            if torch.cuda.is_available():
+                device = torch.device('cuda')
+                device_ids = device
+            else:
+                raise ValueError('Cuda is not availbale.')
+        
+        return device, device_ids
 
     def wrap_model(self):
         '''
         fp16 and data parallel
         '''
         if self.fp16:
-            if APEX_FLAG:
+            if self.amp_backend == 'APEX' and APEX:
                 self.model, self.optimizer = amp.initialize(
                     self.model, self.optimizer,
                     opt_level=self.apex_opt_level, verbosity=0)
-                self.logger('Model, Optimizer -> fp16 (apex)')
+                self.logger('Mixed precision training on apex.')
+            elif AMP:
+                self.logger('Mixed precision training on torch amp.')
             else:
-                self.model = network_to_half(self.model)
-                self.logger('Model -> fp16 (Not recommended)')
+                self.fp16 = False
+                self.logger('No mixed precision training backend found. fp16 is set False.')
 
         if self.parallel == 'dp':
             if self.on_xla:
                 raise NotImplementedError(
                     '[WIP] Data Parallel training on xla devices.')
+            else:
+                self.model = nn.parallel.DataParallel(
+                    self.model, device_ids=self.device_ids)
+                self.logger(f'DataParallel on devices {self.device_ids}')
 
-            if torch.cuda.device_count() > 1:
-                if self.fp16 and APEX_FLAG:
-                    self.model = nn.parallel.DataParallel(self.model)
-                else:
-                    self.model = nn.parallel.DataParallel(self.model)
-
-                self.logger(f'{torch.cuda.device_count()} gpus found.')
         elif self.parallel == 'ddp':
             os.environ['MASTER_ADDR'] = 'localhost'
             os.environ['MASTER_PORT'] = '12355'
@@ -108,45 +152,66 @@ class TorchTrainer:
         approxs = []
         targets = []
         appendices = []
+        if self.amp_backend == 'AMP' and self.fp16:
+            scaler = amp.GradScaler()
 
         self.model.train()
-        for batch_i, inputs in enumerate(loader):
-            batches_done = len(loader) * self.global_epoch + batch_i
+        if self.progress_bar:
+            iterator = enumerate(tqdm(loader))
+        else:
+            iterator = enumerate(loader)
+        for batch_i, inputs in iterator:
+            self.optimizer.zero_grad()
 
+            batches_done = len(loader) * self.global_epoch + batch_i
             inputs = [t.to(self.device) for t in inputs]
             target = inputs[self.argument_target]
-            approx = self.model(*[inputs[i] for i in self.argument_to_model])
-            if self.fp16:
+
+            if self.amp_backend == 'AMP' and self.fp16:
+                with amp.autocast():
+                    approx = self.model(*[inputs[i]
+                                          for i in self.argument_to_model])
+                    if self.argument_to_criterion is not None:
+                        loss = self.criterion(
+                            approx, target, inputs[self.argument_to_criterion])
+                    else:
+                        loss = self.criterion(approx, target)
                 approx = approx.float()
+                loss = loss / grad_accumulations
+                scaler.scale(loss).backward()
+                scaler.step(self.optimizer)
+                scaler.update()
+                
+            else:
+                approx = self.model(*[inputs[i] for i in self.argument_to_model])
+                if self.argument_to_criterion is not None:
+                    loss = self.criterion(
+                        approx, target, inputs[self.argument_to_criterion])
+                else:
+                    loss = self.criterion(approx, target)
+                loss = loss / grad_accumulations
+                if self.amp_backend == 'APEX' and self.fp16:
+                    approx = approx.float()
+                    with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                        scaled_loss.backward()
+                else:
+                    loss.backward()
 
             approxs.append(approx.clone().detach())
             targets.append(target.clone().detach())
             if self.argument_to_metric is not None:
-                appendices.append(inputs[self.argument_to_metric].clone().detach())
-
-            if self.argument_to_criterion is not None:
-                loss = self.criterion(approx, target, inputs[self.argument_to_criterion])
-            else:
-                loss = self.criterion(approx, target)
-
-            if self.fp16 and APEX_FLAG:
-                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                    scaled_loss.backward()
-            else:
-                loss.backward()
+                appendices.append(
+                    inputs[self.argument_to_metric].clone().detach())
 
             if batch_i == 0:
                 # Save output dimension in the first run
                 self.out_dim = approx.shape[1:]
 
             if (batch_i + 1) % grad_accumulations == 0:
-                # Accumulates gradient before each step
-                loss = loss / grad_accumulations  # normalize loss
                 if self.on_xla:
                     xm.optimizer_step(self.optimizer, barrier=True)
                 else:
                     self.optimizer.step()
-                self.optimizer.zero_grad()
                 if self.batch_scheduler:
                     self.scheduler.step()
 
@@ -208,21 +273,23 @@ class TorchTrainer:
 
                 inputs = [t.to(self.device) for t in inputs]
                 target = inputs[self.argument_target]
-                approx = self.model(*[inputs[i] for i in self.argument_to_model])
-                if self.fp16:
-                    approx = approx.float()
-
-                approxs.append(approx.clone().detach())
-                targets.append(target.clone().detach())
-                if self.argument_to_metric is not None:
-                    appendices.append(
-                        inputs[self.argument_to_metric].clone().detach())
+                if self.amp_backend == 'APEX' and self.fp16:
+                    with amp.disable_casts():
+                        approx = self.model(*[inputs[i] for i in self.argument_to_model])
+                else:
+                    approx = self.model(*[inputs[i] for i in self.argument_to_model])
 
                 if self.argument_to_criterion is not None:
                     loss = self.criterion(
                         approx, target, inputs[self.argument_to_criterion])
                 else:
                     loss = self.criterion(approx, target)
+
+                approxs.append(approx.clone().detach())
+                targets.append(target.clone().detach())
+                if self.argument_to_metric is not None:
+                    appendices.append(
+                        inputs[self.argument_to_metric].clone().detach())
 
                 batch_weight = len(target) / loader.batch_size
                 loss_total += loss.item() / total_batch * batch_weight
@@ -291,11 +358,13 @@ class TorchTrainer:
             for inputs in loader:
                 inputs = [t.to(self.device) for t in inputs]
                 target = inputs[self.argument_target]
-                if self.fp16 and APEX_FLAG:
+                if self.amp_backend == 'APEX' and self.fp16:
                     with amp.disable_casts():
-                        approx = self.model(*[inputs[i] for i in self.argument_to_model])
+                        approx = self.model(*[inputs[i]
+                                              for i in self.argument_to_model])
                 else:
-                    approx = self.model(*[inputs[i] for i in self.argument_to_model])
+                    approx = self.model(*[inputs[i]
+                                          for i in self.argument_to_model])
                 prediction.append(approx.detach())
         
         prediction = torch.cat(prediction).cpu().numpy()
@@ -406,6 +475,7 @@ class TorchTrainer:
             self.monitor_metrics = [self.monitor_metrics]
 
         ''' Configure model '''
+        assert self.fp16 == AMP
         self.model.to(self.device)
         if resume:
             self.load_snapshot(snapshot_path, load_callbacks=~ignore_callbacks)

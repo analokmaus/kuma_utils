@@ -1,27 +1,64 @@
+'''
+WIP
+'''
 from pathlib import Path
+import random
 
 import torch
 import torch.nn as nn
 import torch.distributed as dist
+from torch.utils.data import RandomSampler, SequentialSampler
+from torch.utils.data.dataloader import _InfiniteConstantSampler
+from torch.utils.data.distributed import DistributedSampler
+
+try:
+    from apex import amp
+    from apex.parallel import DistributedDataParallel
+    APEX = True
+except:
+    from torch.nn.parallel import DistributedDataParallel
+    APEX = False
 
 
 DDP_TMP_CHECKPOINT = Path('.ddp.tmp')
+
+
+def set_random_seeds(random_seed=0):
+    torch.manual_seed(random_seed)
+    torch.backends.cudnn.deterministic = False
+    random.seed(random_seed)
 
 
 def _train_one_epoch_ddp(
         rank, world_size,
         model, optimizer, scheduler, loader,
         criterion, eval_metric, monitor_metrics,
-        argument_target, argument_to_model, argument_to_metric, argument_to_criterion,
-        batch_scheduler):
+        argument_target=-1, argument_to_model=[0], 
+        argument_to_metric=None, argument_to_criterion=None,
+        batch_scheduler=False):
 
+    ''' Transfer models etc '''
+    torch.cuda.set_device(rank)
     dist.init_process_group(
         backend='nccl', init_method='env://', world_size=world_size, rank=rank)
     model.to(rank)
-    ddp_model = nn.parallel.DistributedDataParallel(
-        model, device_ids=[rank], find_unused_parameters=True)
+    if APEX:
+        model = DistributedDataParallel(
+            model, delay_allreduce=True)
+    else:
+        model = DistributedDataParallel(
+            model, device_ids=[rank], find_unused_parameters=True)
+    
+    ''' Swap loader '''
+    if isinstance(
+        loader.sampler, 
+        (RandomSampler, SequentialSampler, _InfiniteConstantSampler)):
+        loader.__initialized = False
+        loader.sampler = DistributedSampler(loader.dataset)
+        loader.num_workers = 0
+        loader.__initialized = True
 
-    print(f'rank{rank}')
+    
     loss_total = 0.0
     total_batch = len(loader.dataset) / loader.batch_size
     approxs = []
@@ -32,7 +69,7 @@ def _train_one_epoch_ddp(
     for batch_i, inputs in enumerate(loader):
         inputs = [t.to(rank) for t in inputs]
         target = inputs[argument_target]
-        approx = ddp_model(*[inputs[i] for i in argument_to_model])
+        approx = model(*[inputs[i] for i in argument_to_model])
 
         approxs.append(approx.clone().detach())
         targets.append(target.clone().detach())
@@ -76,9 +113,11 @@ def _train_one_epoch_ddp(
             else:
                 monitor_metrics_total.append(
                     monitor_metric(approxs, targets))
+        
+        print(f'LOG: {len(approxs)}')
 
         torch.save({
-            'model': ddp_model.state_dict(),
+            'model': model.module.state_dict(),
             'optimizer': optimizer.state_dict(),
             'scheduler': scheduler.state_dict(), 
             'loss': loss_total,
