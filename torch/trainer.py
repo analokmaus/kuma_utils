@@ -17,7 +17,7 @@ from .tensorboard import DummyTensorBoardLogger
 from .temperature_scaling import TemperatureScaler
 from .callbacks import (
     CallbackEnv, TorchLogger, EarlyStopping)
-from .parallel import DDP_TMP_CHECKPOINT, _train_one_epoch_ddp
+from .parallel import _train_ddp_worker
 
 try:
     import torch_xla
@@ -45,9 +45,6 @@ class TorchTrainer:
     Simple Trainer for PyTorch models
     
     This is something similar to PyTorch Lightning, but this works with vanilla PyTorch modules.
-
-    TODO:
-    - specify xla device list
     '''
 
     def __init__(self, 
@@ -68,6 +65,7 @@ class TorchTrainer:
         self.progress_bar = False
 
     def _get_device(self, device):
+        self.on_xla = False
         if device is None:
             if torch.cuda.is_available():
                 device = torch.device('cuda')
@@ -79,7 +77,6 @@ class TorchTrainer:
             else:
                 device = torch.device('cpu')
                 device_ids = None
-            self.on_xla = False
 
         elif isinstance(device, str):
             if 'xla' in device:
@@ -90,7 +87,6 @@ class TorchTrainer:
                 else:
                     device = xm.xla_device()
             else:
-                self.on_xla = False
                 device = torch.device(device)
 
             if device.type == 'cuda':
@@ -114,13 +110,12 @@ class TorchTrainer:
                 device_ids = device
             else:
                 raise ValueError('Cuda is not availbale.')
-            self.on_xla = False
         
         return device, device_ids
 
-    def wrap_model(self):
+    def _wrap_model(self):
         '''
-        fp16 and data parallel
+        fp16 and parallel
         '''
         if self.fp16:
             if self.amp_backend == 'APEX' and APEX:
@@ -146,7 +141,9 @@ class TorchTrainer:
         elif self.parallel == 'ddp':
             os.environ['MASTER_ADDR'] = 'localhost'
             os.environ['MASTER_PORT'] = '12355'
-            self.world_size = torch.cuda.device_count()
+            self.world_size = len(self.device_ids)
+            self.logger(f'DistributedDataParallel on devices {self.device_ids}')
+
         elif self.parallel is not None:
             raise ValueError(f'Unknown type of parallel {self.parallel}')
 
@@ -330,26 +327,25 @@ class TorchTrainer:
 
         return loss_total, metric_total, monitor_metrics_total
 
-    def _train_one_epoch_ddp_worker(self, loader):
+    def _train_ddp(self, loader, loader_valid, num_epochs):
+        '''
+        Experimental DDP implementation
+        '''
         mp.spawn(
-            _train_one_epoch_ddp,
+            _train_ddp_worker,
             nprocs=self.world_size,
             args=(
                 self.world_size,
-                self.model, self.optimizer, self.scheduler, loader,
+                self.model, self.optimizer, self.scheduler, 
+                loader, loader_valid, 
                 self.criterion, self.eval_metric, self.monitor_metrics,
-                self.argument_target, self.argument_to_model, 
+                num_epochs, self.global_epoch, self.logger, self.callbacks, self.patience, 
+                self.scheduler_target, 
+                self.argument_target, self.argument_to_model,
                 self.argument_to_metric, self.argument_to_criterion,
-                self.batch_scheduler
+                self.batch_scheduler, self.fp16
             )
         )
-        checkpoint = torch.load(
-            str(DDP_TMP_CHECKPOINT), map_location=self.device)
-        DDP_TMP_CHECKPOINT.unlink()
-        self.model.load_state_dict(checkpoint['model'])
-        self.optimizer.load_state_dict(checkpoint['optimizer'])
-        self.scheduler.load_state_dict(checkpoint['scheduler'])
-        return checkpoint['loss'], checkpoint['metric'], checkpoint['monitor']
         
     def predict(self, loader, path=None, test_time_augmentations=1, verbose=True):
         if loader is None:
@@ -375,7 +371,6 @@ class TorchTrainer:
 
         if path is not None:
             np.save(path, prediction)
-
         self.logger(f'Prediction done. exported to {path}')
 
         return prediction
@@ -486,81 +481,81 @@ class TorchTrainer:
         else:
             if snapshot_path.exists():
                 snapshot_path.unlink()
-        self.wrap_model()
+        self._wrap_model()
         
         ''' Train '''
         self.logger(f'Model is on {self.device}')
         self.max_epochs = self.global_epoch + num_epochs - 1
-        self.best_epoch = 1
+        self.best_epoch = self.global_epoch
         self.best_score = None
         self.patience = 0
-        state = {
-            'train_loss': np.inf,
-            'train_metric': None,
-            'train_monitor': None,
-            'valid_loss': np.inf,
-            'valid_metric': None,
-            'valid_monitor': None,
-            'patience': self.patience,
-            'learning_rate': [group['lr'] for group in self.optimizer.param_groups]
-        }
 
-        for epoch in range(num_epochs):
-            start_time = time.time()
+        if self.parallel == 'ddp':
+            self._train_ddp(loader, loader_valid, num_epochs)
 
-            ''' Training set '''
-            if self.parallel == 'ddp':
-                loss_train, metric_train, monitor_metrics_train = \
-                    self._train_one_epoch_ddp_worker(loader)
-            else:
-                loss_train, metric_train, monitor_metrics_train = \
-                    self._train_one_epoch(loader, grad_accumulations)
-
-            if loader_valid is None:
-                ''' No validation set '''
-                loss_valid, metric_valid, monitor_metrics_valid = None, None, None
-
-            else:
-                ''' Validation set '''
-                loss_valid, metric_valid, monitor_metrics_valid = \
-                    self._valid_one_epoch(loader_valid)
-
-            state.update({
-                'train_loss': loss_train,
-                'train_metric': metric_train,
-                'train_monitor': monitor_metrics_train,
-                'valid_loss': loss_valid,
-                'valid_metric': metric_valid,
-                'valid_monitor': monitor_metrics_valid,
+        else:
+            state = {
+                'train_loss': np.inf,
+                'train_metric': None,
+                'train_monitor': None,
+                'valid_loss': np.inf,
+                'valid_metric': None,
+                'valid_monitor': None,
                 'patience': self.patience,
                 'learning_rate': [group['lr'] for group in self.optimizer.param_groups]
-            })
+            }
 
-            if not self.batch_scheduler: # Epoch scheduler
-                if self.scheduler_target is not None:
-                    self.scheduler.step(state[self.scheduler_target])
+            for epoch in range(num_epochs):
+                start_time = time.time()
+
+                ''' Training set '''
+                loss_train, metric_train, monitor_metrics_train = \
+                        self._train_one_epoch(loader, grad_accumulations)
+
+                if loader_valid is None:
+                    ''' No validation set '''
+                    loss_valid, metric_valid, monitor_metrics_valid = None, None, None
                 else:
-                    self.scheduler.step()
+                    ''' Validation set '''
+                    loss_valid, metric_valid, monitor_metrics_valid = \
+                        self._valid_one_epoch(loader_valid)
 
-            ''' Callbacks '''
-            for func in self.callbacks + [self.logger._callback]:
-                func(CallbackEnv(self, epoch, state))
+                state.update({
+                    'train_loss': loss_train,
+                    'train_metric': metric_train,
+                    'train_monitor': monitor_metrics_train,
+                    'valid_loss': loss_valid,
+                    'valid_metric': metric_valid,
+                    'valid_monitor': monitor_metrics_valid,
+                    'patience': self.patience,
+                    'learning_rate': [group['lr'] for group in self.optimizer.param_groups]
+                })
 
-            if self.checkpoint:
-                ''' Save model '''
+                if not self.batch_scheduler: # Epoch scheduler
+                    if self.scheduler_target is not None:
+                        self.scheduler.step(state[self.scheduler_target])
+                    else:
+                        self.scheduler.step()
+
+                ''' Callbacks '''
+                for func in self.callbacks + [self.logger._callback]:
+                    func(CallbackEnv(self, epoch, state))
+
+                if self.checkpoint:
+                    ''' Save model '''
+                    self.save_snapshot(snapshot_path)
+                    self.checkpoint = False
+
+                if self.stop_train:
+                    ''' Early stop '''
+                    self.logger('Training stopped by overfit detector.')
+                    break
+
+                ''' Not stopped '''
+                self.global_epoch += 1
+            else:
+                ''' No early stop till the end '''
                 self.save_snapshot(snapshot_path)
-                self.checkpoint = False
-
-            if self.stop_train:
-                ''' Early stop '''
-                self.logger('Training stopped by overfit detector.')
-                break
-
-            ''' Not stopped '''
-            self.global_epoch += 1
-        else:
-            ''' No early stop till the end '''
-            self.save_snapshot(snapshot_path)
 
         ''' Prediction '''
         self.logger(
