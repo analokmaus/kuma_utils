@@ -12,19 +12,12 @@ import torch
 import torch.nn as nn
 import torch.multiprocessing as mp
 
-from .utils import * 
+from .utils import XLA, get_device
 from .tensorboard import DummyTensorBoardLogger
 from .temperature_scaling import TemperatureScaler
 from .callbacks import (
     CallbackEnv, TorchLogger, EarlyStopping)
 from .parallel import _train_ddp_worker
-
-try:
-    import torch_xla
-    import torch_xla.core.xla_model as xm
-    XLA = True
-except ModuleNotFoundError:
-    XLA = False
 
 try:
     from torch.cuda import amp
@@ -51,10 +44,11 @@ class TorchTrainer:
                  model, device=None, serial='Trainer'):
         
         self.serial = serial
-        self.device, self.device_ids = self._get_device(device)
+        self.device, self.device_ids = get_device(device)
+        self.xla = self.device.type == 'xla'
         self.model = model
 
-        # Some hidden params
+        # Some implicit attributes
         self.apex_opt_level = 'O1'
         self.argument_to_model = [0]
         self.argument_target = -1
@@ -64,59 +58,12 @@ class TorchTrainer:
         self.amp_backend = 'AMP'
         self.progress_bar = False
 
-    def _get_device(self, device):
-        self.on_xla = False
-        if device is None:
-            if torch.cuda.is_available():
-                device = torch.device('cuda')
-                device_count = torch.cuda.device_count()
-                if device_count > 1:
-                    device_ids = list(range(device_count))
-                else:
-                    device_ids = [0]
-            else:
-                device = torch.device('cpu')
-                device_ids = None
+    def _register_callbacks(self, callbacks):
+        self.before_train = [func.before_train for func in callbacks]
+        self.after_train = [func.after_train for func in callbacks]
 
-        elif isinstance(device, str):
-            if 'xla' in device:
-                assert XLA
-                self.on_xla = True
-                if device in xm.get_xla_supported_devices():
-                    device = xm.xla_device(device.split(':')[-1])
-                else:
-                    device = xm.xla_device()
-            else:
-                device = torch.device(device)
-
-            if device.type == 'cuda':
-                assert torch.cuda.is_available()
-                if device.index is None:
-                    device_count = torch.cuda.device_count()
-                    if device_count > 1:
-                        device_ids = list(range(device_count))
-                    else:
-                        device_ids = [0]
-                else:
-                    device_ids = [device.index]
-            elif device.type == 'xla':
-                device_ids = [device.index]
-            elif device.type == 'cpu':
-                device_ids = None
-
-        elif isinstance(device, (list, tuple)):
-            if torch.cuda.is_available():
-                device = torch.device('cuda')
-                device_ids = device
-            else:
-                raise ValueError('Cuda is not availbale.')
-        
-        return device, device_ids
-
-    def _wrap_model(self):
-        '''
-        fp16 and parallel
-        '''
+    def _configure_model(self):
+        ''' Mixed precision '''
         if self.fp16:
             if self.amp_backend == 'APEX' and APEX:
                 self.model, self.optimizer = amp.initialize(
@@ -129,10 +76,11 @@ class TorchTrainer:
                 self.fp16 = False
                 self.logger('No mixed precision training backend found. fp16 is set False.')
 
+        ''' Parallel training '''
         if self.parallel == 'dp':
-            if self.on_xla:
+            if self.xla:
                 raise NotImplementedError(
-                    '[WIP] Data Parallel training on xla devices.')
+                    'Data Parallel training on xla devices is not supported.')
             else:
                 self.model = nn.parallel.DataParallel(
                     self.model, device_ids=self.device_ids)
@@ -148,7 +96,7 @@ class TorchTrainer:
             raise ValueError(f'Unknown type of parallel {self.parallel}')
 
     def _train_one_epoch(self, loader, grad_accumulations=1):
-        loss_total = 0.0
+        loss_total = .0
         total_batch = len(loader.dataset) / loader.batch_size
         approxs = []
         targets = []
@@ -209,7 +157,7 @@ class TorchTrainer:
                 self.out_dim = approx.shape[1:]
 
             if (batch_i + 1) % grad_accumulations == 0:
-                if self.on_xla:
+                if self.xla:
                     xm.optimizer_step(self.optimizer, barrier=True)
                 else:
                     self.optimizer.step()
@@ -261,7 +209,7 @@ class TorchTrainer:
         return loss_total, metric_total, monitor_metrics_total
 
     def _valid_one_epoch(self, loader):
-        loss_total = 0.0
+        loss_total = .0
         total_batch = len(loader.dataset) / loader.batch_size
         approxs = []
         targets = []
@@ -274,7 +222,7 @@ class TorchTrainer:
 
                 inputs = [t.to(self.device) for t in inputs]
                 target = inputs[self.argument_target]
-                if self.amp_backend == 'APEX' and self.fp16:
+                if self.amp_backend == 'APEX' and self.fp16:  # inference should be in FP32
                     with amp.disable_casts():
                         approx = self.model(*[inputs[i] for i in self.argument_to_model])
                 else:
@@ -336,21 +284,14 @@ class TorchTrainer:
             nprocs=self.world_size,
             args=(
                 self.world_size,
-                self.model, self.optimizer, self.scheduler, 
-                loader, loader_valid, 
-                self.criterion, self.eval_metric, self.monitor_metrics,
-                num_epochs, self.global_epoch, self.logger, self.callbacks, self.patience, 
-                self.scheduler_target, 
-                self.argument_target, self.argument_to_model,
-                self.argument_to_metric, self.argument_to_criterion,
-                self.batch_scheduler, self.fp16
-            )
+                self, loader, loader_valid, num_epochs)
         )
         
     def predict(self, loader, path=None, test_time_augmentations=1, verbose=True):
         if loader is None:
-            self.logger('Skipping prediction...')
+            self.logger('Loader is None. Nothing to predict.')
             return None
+
         prediction = []
 
         self.model.eval()
@@ -359,7 +300,7 @@ class TorchTrainer:
                 inputs = [t.to(self.device) for t in inputs]
                 target = inputs[self.argument_target]
                 if self.amp_backend == 'APEX' and self.fp16:
-                    with amp.disable_casts():
+                    with amp.disable_casts(): # inference should be in FP32
                         approx = self.model(*[inputs[i]
                                               for i in self.argument_to_model])
                 else:
@@ -386,22 +327,22 @@ class TorchTrainer:
             'model': module.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'scheduler': self.scheduler.state_dict(),
-            'callbacks': [func.state_dict() for func in self.callbacks],
         }, path)
 
-    def load_snapshot(self, path, 
-                      load_epoch=True, load_scheduler=True, load_callbacks=True):
-        checkpoint = torch.load(path, map_location=self.device)
-        if isinstance(self.model, torch.nn.DataParallel):
+    def load_snapshot(self, path, device=None, 
+                      load_epoch=True, load_scheduler=True):
+        if device is None:
+            device = self.device
+        checkpoint = torch.load(path, map_location=device)
+        if isinstance(
+                self.model, 
+                (torch.nn.DataParallel, torch.nn.parallel.DistributedDataParallel)):
             self.model.module.load_state_dict(checkpoint['model'])
         else:
             self.model.load_state_dict(checkpoint['model'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         if load_scheduler:
             self.scheduler.load_state_dict(checkpoint['scheduler'])
-        if load_callbacks:
-            for i in range(len(self.callbacks)):
-                self.callbacks[i].load_state_dict(checkpoint['callbacks'][i])
         if load_epoch:
             self.global_epoch = checkpoint['global_epoch']
 
@@ -410,7 +351,7 @@ class TorchTrainer:
             criterion, optimizer, scheduler, loader, num_epochs, 
             loader_valid=None, loader_test=None, batch_scheduler=False, callbacks=[],
             # Snapshot
-            export_dir=None, resume=False, ignore_callbacks=False, 
+            export_dir=None, resume=False, 
             # Special training
             fp16=False, parallel=None, 
             grad_accumulations=1, calibrate_model=False,
@@ -421,7 +362,7 @@ class TorchTrainer:
             # Logger
             logger=None, tb_logger=None
         ):
-
+        # Register params
         self.criterion = criterion
         self.optimizer = optimizer
         self.scheduler = scheduler
@@ -430,13 +371,14 @@ class TorchTrainer:
         self.monitor_metrics = monitor_metrics
         self.logger = logger
         self.tb_logger = tb_logger
-        self.callbacks = callbacks
         self.fp16 = fp16
         self.parallel = parallel
-
+        self._register_callbacks(callbacks) # self.before_train, self.after_train
+        # Important flags
         self.global_epoch = 1
         self.stop_train = False
         self.checkpoint = False
+        # Results
         self.evals_result = {
             'train': {'loss': [], 'metric': []},
             'valid': {'loss': [], 'metric': []}
@@ -476,12 +418,12 @@ class TorchTrainer:
         ''' Configure model '''
         self.model.to(self.device)
         if resume:
-            self.load_snapshot(snapshot_path, load_callbacks=~ignore_callbacks)
+            self.load_snapshot(snapshot_path)
             self.logger(f'{snapshot_path} is loaded. Continuing from epoch {self.global_epoch}.')
         else:
             if snapshot_path.exists():
                 snapshot_path.unlink()
-        self._wrap_model()
+        self._configure_model()
         
         ''' Train '''
         self.logger(f'Model is on {self.device}')
@@ -495,10 +437,10 @@ class TorchTrainer:
 
         else:
             state = {
-                'train_loss': np.inf,
+                'train_loss': None,
                 'train_metric': None,
                 'train_monitor': None,
-                'valid_loss': np.inf,
+                'valid_loss': None,
                 'valid_metric': None,
                 'valid_monitor': None,
                 'patience': self.patience,
@@ -506,17 +448,18 @@ class TorchTrainer:
             }
 
             for epoch in range(num_epochs):
-                start_time = time.time()
+                ''' before train callbacks '''
+                for func in self.before_train:
+                    func(CallbackEnv(self, epoch, state))
 
                 ''' Training set '''
                 loss_train, metric_train, monitor_metrics_train = \
                         self._train_one_epoch(loader, grad_accumulations)
 
+                ''' Validation set '''
                 if loader_valid is None:
-                    ''' No validation set '''
                     loss_valid, metric_valid, monitor_metrics_valid = None, None, None
                 else:
-                    ''' Validation set '''
                     loss_valid, metric_valid, monitor_metrics_valid = \
                         self._valid_one_epoch(loader_valid)
 
@@ -537,8 +480,8 @@ class TorchTrainer:
                     else:
                         self.scheduler.step()
 
-                ''' Callbacks '''
-                for func in self.callbacks + [self.logger._callback]:
+                ''' After train callbacks '''
+                for func in self.after_train + [self.logger._callback]:
                     func(CallbackEnv(self, epoch, state))
 
                 if self.checkpoint:
@@ -562,7 +505,7 @@ class TorchTrainer:
             f'Best epoch is [{self.best_epoch}], best score is [{self.best_score}].')
         if snapshot_path.exists():
             self.load_snapshot(
-                str(snapshot_path), load_epoch=False, load_scheduler=False, load_callbacks=False)
+                str(snapshot_path), load_epoch=False, load_scheduler=False)
         else:
             self.save_snapshot(snapshot_path)
 

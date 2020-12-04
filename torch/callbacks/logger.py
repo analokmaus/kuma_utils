@@ -40,7 +40,9 @@ class TorchLogger:
         log_str = ''
         for item in self.log_items:
             if item == 'epoch':
-                log_str += f'[Epoch {env.trainer.global_epoch:-3}/{env.trainer.max_epochs:-3}] '
+                num_len = len(str(env.trainer.max_epochs))
+                log_str += f'Epoch {env.trainer.global_epoch:-{num_len}}/'
+                log_str += f'{env.trainer.max_epochs:-{num_len}} | '
             elif item == 'patience':
                 if env.trainer.patience > 0:
                     log_str += f'(*{env.trainer.patience})'

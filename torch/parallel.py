@@ -13,35 +13,28 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import RandomSampler, SequentialSampler
 from torch.utils.data.dataloader import _InfiniteConstantSampler
 from torch.utils.data.distributed import DistributedSampler
 
+from .callbacks import CallbackEnv
+
 try:
     from torch.cuda import amp
-    from torch.nn.parallel import DistributedDataParallel
     AMP = True
+    APEX = False
 except ModuleNotFoundError:
-    AMP = False
-
-from .callbacks import CallbackEnv
+    try:
+        from apex import amp
+        APEX = True
+        AMP = True
+    except ModuleNotFoundError:
+        APEX = False
+        AMP = False
 
 
 DDP_TMP_CHECKPOINT = Path('.ddp.tmp')
-
-
-@dataclass(frozen=False)
-class DummyTrainer:
-    '''
-    Dummy trainer for callbacks
-    '''
-    checkpoint: bool
-    stop_train: bool
-    best_score: float
-    best_epoch: int
-    global_epoch: int
-    max_epochs: int
-    patience: int
 
 
 def _set_random_seeds(random_seed=0):
@@ -198,63 +191,54 @@ def _valid_one_epoch_ddp(
 
 
 def _train_ddp_worker(
-        rank, world_size,
-        model, optimizer, scheduler, loader, loader_valid, 
-        criterion, eval_metric, monitor_metrics, 
-        num_epochs, global_epoch, logger, callbacks, patience, 
-        scheduler_target=None, 
-        argument_target=-1, argument_to_model=[0], 
-        argument_to_metric=None, argument_to_criterion=None,
-        batch_scheduler=False, use_amp=False):
+        rank, world_size, trainer, loader, loader_test, num_epochs):
 
     ''' Transfer models etc '''
     _set_random_seeds(0)
     torch.cuda.set_device(rank)
     dist.init_process_group(
         backend='nccl', init_method='env://', world_size=world_size, rank=rank)
-    model.to(rank)
-    model = DistributedDataParallel(
-        model, device_ids=[rank], find_unused_parameters=True)
+    trainer.model.to(rank)
+    trainer.model = DistributedDataParallel(
+        trainer.model, device_ids=[rank], find_unused_parameters=True)
     
     ''' Swap loader '''
-    if isinstance(
-        loader.sampler, 
-        (RandomSampler, SequentialSampler, _InfiniteConstantSampler)):
-        loader._DataLoader__initialized = False
-        loader.sampler = DistributedSampler(loader.dataset)
-        loader.num_workers = 0
-        loader_DataLoader__initialized = True
+    for _loader in [loader, loader_test]:
+        if _loader is None:
+            continue
+        if isinstance(
+            _loader.sampler, 
+            (RandomSampler, SequentialSampler, _InfiniteConstantSampler)):
+            _loader._DataLoader__initialized = False
+            _loader.sampler = DistributedSampler(loader.dataset)
+            # _loader.num_workers = 0
+            _loader_DataLoader__initialized = True
 
     ''' Training '''
-    trainer = DummyTrainer(
-        checkpoint=False, 
-        stop_train=False,
-        best_score=None,
-        best_epoch=global_epoch,
-        global_epoch=global_epoch,
-        max_epochs=global_epoch+num_epochs-1,
-        patience=patience
-    )
     state = {
-        'train_loss': np.inf,
+        'train_loss': None,
         'train_metric': None,
         'train_monitor': None,
-        'valid_loss': np.inf,
+        'valid_loss': None,
         'valid_metric': None,
         'valid_monitor': None,
-        'patience': patience,
-        'learning_rate': [group['lr'] for group in optimizer.param_groups]
+        'patience': trainer.patience,
+        'learning_rate': [group['lr'] for group in trainer.optimizer.param_groups]
     }
 
     for epoch in range(num_epochs):
+        if rank == 0:
+            ''' Before train callbacks '''
+            for func in trainer.before_train:
+                func(CallbackEnv(trainer, epoch, state))
 
         ''' Training set '''
         res_train = _train_one_epoch_ddp(
-            rank, model, loader, optimizer, scheduler,
-            criterion, eval_metric, monitor_metrics,
-            argument_target, argument_to_model,
-            argument_to_metric, argument_to_criterion,
-            batch_scheduler, use_amp)
+            rank, trainer.model, loader, trainer.optimizer, trainer.scheduler,
+            trainer.criterion, trainer.eval_metric, trainer.monitor_metrics,
+            trainer.argument_target, trainer.argument_to_model,
+            trainer.argument_to_metric, trainer.argument_to_criterion,
+            trainer.batch_scheduler, trainer.fp16)
         if rank == 0:
             loss_train, metric_train, monitor_metrics_train = res_train
 
@@ -263,11 +247,11 @@ def _train_ddp_worker(
             loss_valid, metric_valid, monitor_metrics_valid = None, None, None
         else:
             res_valid = _valid_one_epoch_ddp(
-                rank, model, loader, optimizer, scheduler,
-                criterion, eval_metric, monitor_metrics,
-                argument_target, argument_to_model,
-                argument_to_metric, argument_to_criterion,
-                batch_scheduler, use_amp)
+                rank, trainer.model, loader, trainer.optimizer, trainer.scheduler,
+                trainer.criterion, trainer.eval_metric, trainer.monitor_metrics,
+                trainer.argument_target, trainer.argument_to_model,
+                trainer.argument_to_metric, trainer.argument_to_criterion,
+                trainer.batch_scheduler, trainer.fp16)
             loss_valid, metric_valid, monitor_metrics_valid = res_valid
         
         ''' Callbacks '''
@@ -279,22 +263,23 @@ def _train_ddp_worker(
                 'valid_loss': loss_valid,
                 'valid_metric': metric_valid,
                 'valid_monitor': monitor_metrics_valid,
-                'patience': patience,
-                'learning_rate': [group['lr'] for group in optimizer.param_groups]
+                'patience': trainer.patience,
+                'learning_rate': [group['lr'] for group in trainer.optimizer.param_groups]
             })
             
-            if not batch_scheduler:  # Epoch scheduler
-                if scheduler_target is not None:
-                    scheduler.step(state[scheduler_target])
+            if not traine.batch_scheduler:  # Epoch scheduler
+                if trainer.scheduler_target is not None:
+                    trainer.scheduler.step(state[scheduler_target])
                 else:
-                    scheduler.step()
+                    trainer.scheduler.step()
             
-            for func in callbacks + [logger._callback]:
+            ''' After train callbacks '''
+            for func in trainer.after_train + [trainer.logger._callback]:
                 func(CallbackEnv(trainer, epoch, state))
 
             if trainer.checkpoint:
                 ''' Save model '''
-                logger('best!')
+                trainer.save_snapshot(snapshot_path)
                 trainer.checkpoint = False
 
             if trainer.stop_train:

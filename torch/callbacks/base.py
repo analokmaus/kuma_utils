@@ -17,7 +17,10 @@ class CallbackTemplate:
     def __init__(self):
         pass
 
-    def __call__(self, env):
+    def before_train(self, env):
+        pass
+
+    def after_train(self, env):
         pass
 
     def state_dict(self):

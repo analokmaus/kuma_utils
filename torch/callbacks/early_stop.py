@@ -23,7 +23,7 @@ class EarlyStopping(CallbackTemplate):
             'best_epoch': None
         }
 
-    def __call__(self, env):
+    def after_train(self, env):
         score = env.results[self.state['target']]
         if env.epoch <= self.state['skip_epoch']:
             self.state['best_score'] = score
