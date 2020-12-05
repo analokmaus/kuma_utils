@@ -11,7 +11,7 @@ class CallbackEnv:
 
 class CallbackTemplate:
     '''
-    Callback Template for TorchTrainer
+    Callback is called before or after each epoch.
     '''
 
     def __init__(self):

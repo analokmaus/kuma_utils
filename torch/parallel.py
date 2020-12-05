@@ -191,7 +191,7 @@ def _valid_one_epoch_ddp(
 
 
 def _train_ddp_worker(
-        rank, world_size, trainer, loader, loader_test, num_epochs):
+        rank, world_size, trainer, loader, loader_valid, num_epochs):
 
     ''' Transfer models etc '''
     _set_random_seeds(0)

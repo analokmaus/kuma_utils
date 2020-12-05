@@ -17,6 +17,7 @@ from .tensorboard import DummyTensorBoardLogger
 from .temperature_scaling import TemperatureScaler
 from .callbacks import (
     CallbackEnv, TorchLogger, EarlyStopping)
+from .hooks import SimpleTrainEval
 from .parallel import _train_ddp_worker
 
 try:
@@ -50,10 +51,6 @@ class TorchTrainer:
 
         # Some implicit attributes
         self.apex_opt_level = 'O1'
-        self.argument_to_model = [0]
-        self.argument_target = -1
-        self.argument_to_criterion = None
-        self.argument_to_metric = None
         self.scheduler_target = None
         self.amp_backend = 'AMP'
         self.progress_bar = False
@@ -61,6 +58,12 @@ class TorchTrainer:
     def _register_callbacks(self, callbacks):
         self.before_train = [func.before_train for func in callbacks]
         self.after_train = [func.after_train for func in callbacks]
+
+    def _register_hook(self, hook):
+        self.batch_train = hook.batch_train
+        self.batch_eval = hook.batch_eval
+        self.batch_test = hook.batch_test
+        self.end_train_eval = hook.end_train_eval
 
     def _configure_model(self):
         ''' Mixed precision '''
@@ -100,7 +103,7 @@ class TorchTrainer:
         total_batch = len(loader.dataset) / loader.batch_size
         approxs = []
         targets = []
-        appendices = []
+        extras = []
         if self.amp_backend == 'AMP' and self.fp16:
             scaler = amp.GradScaler()
 
@@ -109,22 +112,16 @@ class TorchTrainer:
             iterator = enumerate(tqdm(loader))
         else:
             iterator = enumerate(loader)
+
         for batch_i, inputs in iterator:
             self.optimizer.zero_grad()
-
             batches_done = len(loader) * self.global_epoch + batch_i
             inputs = [t.to(self.device) for t in inputs]
-            target = inputs[self.argument_target]
 
             if self.amp_backend == 'AMP' and self.fp16:
                 with amp.autocast():
-                    approx = self.model(*[inputs[i]
-                                          for i in self.argument_to_model])
-                    if self.argument_to_criterion is not None:
-                        loss = self.criterion(
-                            approx, target, inputs[self.argument_to_criterion])
-                    else:
-                        loss = self.criterion(approx, target)
+                    approx, target, loss, metric, extra = \
+                        self.batch_train(self.model, inputs, self.criterion, self.eval_metric)
                 approx = approx.float()
                 loss = loss / grad_accumulations
                 scaler.scale(loss).backward()
@@ -132,12 +129,8 @@ class TorchTrainer:
                 scaler.update()
                 
             else:
-                approx = self.model(*[inputs[i] for i in self.argument_to_model])
-                if self.argument_to_criterion is not None:
-                    loss = self.criterion(
-                        approx, target, inputs[self.argument_to_criterion])
-                else:
-                    loss = self.criterion(approx, target)
+                approx, target, loss, metric, extra = \
+                    self.batch_train(self.model, inputs, self.criterion, self.eval_metric)
                 loss = loss / grad_accumulations
                 if self.amp_backend == 'APEX' and self.fp16:
                     approx = approx.float()
@@ -148,9 +141,8 @@ class TorchTrainer:
 
             approxs.append(approx.clone().detach())
             targets.append(target.clone().detach())
-            if self.argument_to_metric is not None:
-                appendices.append(
-                    inputs[self.argument_to_metric].clone().detach())
+            if extra is not None:
+                extras.append(extra.clone().detach())
 
             if batch_i == 0:
                 # Save output dimension in the first run
@@ -164,48 +156,38 @@ class TorchTrainer:
                 if self.batch_scheduler:
                     self.scheduler.step()
 
-            for param_group in self.optimizer.param_groups:
-                learning_rate = param_group['lr']
-            log_train_batch = [
-                (f'batch_loss_train[{self.serial}]', loss.item()),
-                (f'batch_lr_train[{self.serial}]', learning_rate)
+            ''' TensorBoard logging '''
+            learning_rate = [ param_group['lr'] \
+                for param_group in self.optimizer.param_groups ]
+            logs = [
+                ('batch_train_loss', loss.item()),
+                ('batch_train_lr', learning_rate)
             ]
-            self.tb_logger.list_of_scalars_summary(
-                log_train_batch, batches_done)
+            if metric is not None:
+                logs.append(('batch_train_mertric', metric))
+            self.tb_logger.list_of_scalars_summary(logs, batches_done)
 
             batch_weight = len(target) / loader.batch_size
             loss_total += loss.item() / total_batch * batch_weight
 
         approxs = torch.cat(approxs).cpu()
         targets = torch.cat(targets).cpu()
-        if len(appendices) > 0:
-            appendices = torch.cat(appendices).cpu()
+        if len(extras) > 0:
+            extras = torch.cat(extras).cpu()
         
-        if self.eval_metric is None:
-            metric_total = -loss_total
-        else:
-            if len(appendices) > 0:
-                metric_total = self.eval_metric(approxs, targets, appendices)
-            else:
-                metric_total = self.eval_metric(approxs, targets)
-        
-        monitor_metrics_total = []
-        for monitor_metric in self.monitor_metrics:
-            if len(appendices) > 0:
-                monitor_metrics_total.append(
-                    monitor_metric(approxs, targets, appendices))
-            else:
-                monitor_metrics_total.append(
-                    monitor_metric(approxs, targets))
+        metric_total, monitor_metrics_total = \
+            self.end_train_eval(approxs, targets, extras, 
+                                self.eval_metric, self.monitor_metrics)
 
-        log_train = [
-            (f'epoch_metric_train[{self.serial}]', metric_total),
-            (f'epoch_loss_train[{self.serial}]', loss_total)
+        ''' TensorBoard logging '''
+        logs = [
+            ('epoch_train_loss', loss_total), 
+            ('epoch_train_metric', metric_total),
         ]
-        self.tb_logger.list_of_scalars_summary(log_train, self.global_epoch)
+        self.tb_logger.list_of_scalars_summary(logs, self.global_epoch)
+
         self.evals_result['train']['loss'].append(loss_total)
         self.evals_result['train']['metric'].append(metric_total)
-
         return loss_total, metric_total, monitor_metrics_total
 
     def _valid_one_epoch(self, loader):
@@ -213,66 +195,65 @@ class TorchTrainer:
         total_batch = len(loader.dataset) / loader.batch_size
         approxs = []
         targets = []
-        appendices = []
+        extras = []
 
         self.model.eval()
+        if self.progress_bar:
+            iterator = enumerate(tqdm(loader))
+        else:
+            iterator = enumerate(loader)
+        
         with torch.no_grad():
-            for batch_i, inputs in enumerate(loader):
+            for batch_i, inputs in iterator:
+                self.optimizer.zero_grad()
                 batches_done = len(loader) * self.global_epoch + batch_i
-
                 inputs = [t.to(self.device) for t in inputs]
-                target = inputs[self.argument_target]
-                if self.amp_backend == 'APEX' and self.fp16:  # inference should be in FP32
-                    with amp.disable_casts():
-                        approx = self.model(*[inputs[i] for i in self.argument_to_model])
-                else:
-                    approx = self.model(*[inputs[i] for i in self.argument_to_model])
 
-                if self.argument_to_criterion is not None:
-                    loss = self.criterion(
-                        approx, target, inputs[self.argument_to_criterion])
+                if self.amp_backend == 'APEX' and self.fp16:
+                    with amp.disable_casts():  # inference should be in FP32
+                        approx, target, loss, metric, extra = \
+                            self.batch_train(self.model, inputs,
+                                            self.criterion, self.eval_metric)
+
                 else:
-                    loss = self.criterion(approx, target)
+                    approx, target, loss, metric, extra = \
+                        self.batch_train(self.model, inputs,
+                                        self.criterion, self.eval_metric)
 
                 approxs.append(approx.clone().detach())
                 targets.append(target.clone().detach())
-                if self.argument_to_metric is not None:
-                    appendices.append(
-                        inputs[self.argument_to_metric].clone().detach())
+                if extra is not None:
+                    extras.append(extra.clone().detach())
+
+                ''' TensorBoard logging '''
+                logs = [
+                    ('batch_valid_loss', loss.item()),
+                ]
+                if metric is not None:
+                    logs.append(('batch_valid_mertric', metric))
+                self.tb_logger.list_of_scalars_summary(logs, batches_done)
 
                 batch_weight = len(target) / loader.batch_size
                 loss_total += loss.item() / total_batch * batch_weight
 
         approxs = torch.cat(approxs).cpu()
         targets = torch.cat(targets).cpu()
-        if len(appendices) > 0:
-            appendices = torch.cat(appendices).cpu()
+        if len(extras) > 0:
+            extras = torch.cat(extras).cpu()
 
-        if self.eval_metric is None:
-            metric_total = -loss_total
-        else:
-            if len(appendices) > 0:
-                metric_total = self.eval_metric(approxs, targets, appendices)
-            else:
-                metric_total = self.eval_metric(approxs, targets)
+        metric_total, monitor_metrics_total = \
+            self.end_train_eval(approxs, targets, extras,
+                                self.eval_metric, self.monitor_metrics)
 
-        monitor_metrics_total = []
-        for monitor_metric in self.monitor_metrics:
-            if len(appendices) > 0:
-                monitor_metrics_total.append(
-                    monitor_metric(approxs, targets, appendices))
-            else:
-                monitor_metrics_total.append(
-                    monitor_metric(approxs, targets))
-
-        log_valid = [
-            (f'epoch_metric_valid[{self.serial}]', metric_total),
-            (f'epoch_loss_valid[{self.serial}]', loss_total)
+        ''' TensorBoard logging '''
+        logs = [
+            ('epoch_valid_loss', loss_total), 
+            ('epoch_valid_metric', metric_total),
         ]
-        self.tb_logger.list_of_scalars_summary(log_valid, self.global_epoch)
+        self.tb_logger.list_of_scalars_summary(logs, self.global_epoch)
+
         self.evals_result['valid']['loss'].append(loss_total)
         self.evals_result['valid']['metric'].append(metric_total)
-
         return loss_total, metric_total, monitor_metrics_total
 
     def _train_ddp(self, loader, loader_valid, num_epochs):
@@ -298,14 +279,11 @@ class TorchTrainer:
         with torch.no_grad():
             for inputs in loader:
                 inputs = [t.to(self.device) for t in inputs]
-                target = inputs[self.argument_target]
                 if self.amp_backend == 'APEX' and self.fp16:
                     with amp.disable_casts(): # inference should be in FP32
-                        approx = self.model(*[inputs[i]
-                                              for i in self.argument_to_model])
+                        approx = self.batch_test(self.model, inputs)
                 else:
-                    approx = self.model(*[inputs[i]
-                                          for i in self.argument_to_model])
+                    approx = self.batch_test(self.model, inputs)
                 prediction.append(approx.detach())
         
         prediction = torch.cat(prediction).cpu().numpy()
@@ -349,7 +327,8 @@ class TorchTrainer:
     def train(self,
             # Essential
             criterion, optimizer, scheduler, loader, num_epochs, 
-            loader_valid=None, loader_test=None, batch_scheduler=False, callbacks=[],
+            loader_valid=None, loader_test=None, batch_scheduler=False, 
+            hook=SimpleTrainEval(), callbacks=[],
             # Snapshot
             export_dir=None, resume=False, 
             # Special training
@@ -358,7 +337,7 @@ class TorchTrainer:
             # Evaluation
             eval_metric=None, monitor_metrics=[],
             # Prediction
-            test_time_augmentations=1, predict_valid=True, predict_test=True,  # Prediction
+            test_time_augmentations=1, predict_valid=True, predict_test=True, 
             # Logger
             logger=None, tb_logger=None
         ):
@@ -374,6 +353,7 @@ class TorchTrainer:
         self.fp16 = fp16
         self.parallel = parallel
         self._register_callbacks(callbacks) # self.before_train, self.after_train
+        self._register_hook(hook) # self.batch_train, self.batch_eval, self.batch_test
         # Important flags
         self.global_epoch = 1
         self.stop_train = False
