@@ -1,21 +1,19 @@
 
 class HookTemplate:
     '''
-    Hook is called in each batch training / inference, 
-    in order to define the training process and carry out
-    epoch level evaluation.
+    Hook is called in each mini-batch during traing / inference 
+    and after processed all mini-batches, 
+    in order to define the training process and evaluate the results of each epoch.
     '''
 
     def __init__(self):
         pass
 
-    def batch_train(self, model, inputs, criterion, eval_metric, logger, tb_logger):
+    def batch_train(self, trainer, inputs):
         pass
 
-    batch_eval = batch_train
-
-    def end_train_eval(self, approxs, targets, extras, eval_metric, monitor_metrics):
+    def batch_test(self, trainer, inputs):
         pass
 
-    def batch_test(self, model, inputs):
+    def epoch_eval(self, trainer, approxs, targets, extras):
         pass

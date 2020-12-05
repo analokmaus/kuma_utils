@@ -14,14 +14,15 @@ class ArgumentSpecifiedHook(HookTemplate):
         self.argument_to_criterion = argument_to_criterion
         self.argument_extra = argument_extra
 
-    def batch_train(self, model, inputs, criterion, eval_metric):
+    def batch_train(self, trainer, inputs):
         ''' Forward '''
         target = inputs[self.argument_target]
-        approx = model(*[inputs[i] for i in self.argument_to_model])
+        approx = trainer.model(*[inputs[i] for i in self.argument_to_model])
         if self.argument_to_criterion is not None:
-            loass = criterion(approx, target, inputs[self.argument_to_criterion])
+            loass = trainer.criterion(
+                approx, target, inputs[self.argument_to_criterion])
         else:
-            loss = criterion(approx, target)
+            loss = trainer.criterion(approx, target)
         metric = None
         if self.argument_extra is not None:
             extra = inputs[self.argument_extra]
@@ -29,17 +30,20 @@ class ArgumentSpecifiedHook(HookTemplate):
             extra = None
         return approx, target, loss, metric, extra
 
-    def end_train_eval(self, approxs, targets, extras,
-                       eval_metric, monitor_metrics):
-        if eval_metric is None:
+    def batch_test(self, trainer, inputs):
+        approx = trainer.model(*[inputs[i] for i in self.argument_to_model])
+        return approx
+
+    def epoch_eval(self, trainer, approxs, targets, extras):
+        if trainer.eval_metric is None:
             metric_total = None
         elif len(extras) > 0:
-            metric_total = eval_metric(approxs, targets, extras)
+            metric_total = trainer.eval_metric(approxs, targets, extras)
         else:
-            metric_total = eval_metric(approxs, targets)
+            metric_total = trainer.eval_metric(approxs, targets)
 
         monitor_metrics_total = []
-        for monitor_metric in monitor_metrics:
+        for monitor_metric in trainer.monitor_metrics:
             if len(extras) > 0:
                 monitor_metrics_total.append(
                     monitor_metric(approxs, targets, extras))
@@ -47,7 +51,3 @@ class ArgumentSpecifiedHook(HookTemplate):
                 monitor_metrics_total.append(
                     monitor_metric(approxs, targets))
         return metric_total, monitor_metrics_total
-
-    def batch_test(self, model, inputs):
-        approx = model(*[inputs[i] for i in self.argument_to_model])
-        return approx

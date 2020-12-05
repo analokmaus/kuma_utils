@@ -17,7 +17,7 @@ from .tensorboard import DummyTensorBoardLogger
 from .temperature_scaling import TemperatureScaler
 from .callbacks import (
     CallbackEnv, TorchLogger, EarlyStopping)
-from .hooks import SimpleTrainEval
+from .hooks import SimpleHook
 from .parallel import _train_ddp_worker
 
 try:
@@ -61,9 +61,8 @@ class TorchTrainer:
 
     def _register_hook(self, hook):
         self.batch_train = hook.batch_train
-        self.batch_eval = hook.batch_eval
         self.batch_test = hook.batch_test
-        self.end_train_eval = hook.end_train_eval
+        self.epoch_eval = hook.epoch_eval
 
     def _configure_model(self):
         ''' Mixed precision '''
@@ -115,13 +114,12 @@ class TorchTrainer:
 
         for batch_i, inputs in iterator:
             self.optimizer.zero_grad()
-            batches_done = len(loader) * self.global_epoch + batch_i
+            batches_done = len(loader) * (self.global_epoch-1) + batch_i
             inputs = [t.to(self.device) for t in inputs]
 
             if self.amp_backend == 'AMP' and self.fp16:
                 with amp.autocast():
-                    approx, target, loss, metric, extra = \
-                        self.batch_train(self.model, inputs, self.criterion, self.eval_metric)
+                    approx, target, loss, metric, extra = self.batch_train(self, inputs)
                 approx = approx.float()
                 loss = loss / grad_accumulations
                 scaler.scale(loss).backward()
@@ -129,8 +127,7 @@ class TorchTrainer:
                 scaler.update()
                 
             else:
-                approx, target, loss, metric, extra = \
-                    self.batch_train(self.model, inputs, self.criterion, self.eval_metric)
+                approx, target, loss, metric, extra = self.batch_train(self, inputs)
                 loss = loss / grad_accumulations
                 if self.amp_backend == 'APEX' and self.fp16:
                     approx = approx.float()
@@ -176,8 +173,7 @@ class TorchTrainer:
             extras = torch.cat(extras).cpu()
         
         metric_total, monitor_metrics_total = \
-            self.end_train_eval(approxs, targets, extras, 
-                                self.eval_metric, self.monitor_metrics)
+            self.epoch_eval(self, approxs, targets, extras)
 
         ''' TensorBoard logging '''
         logs = [
@@ -205,20 +201,15 @@ class TorchTrainer:
         
         with torch.no_grad():
             for batch_i, inputs in iterator:
-                self.optimizer.zero_grad()
-                batches_done = len(loader) * self.global_epoch + batch_i
+                batches_done = len(loader) * (self.global_epoch-1) + batch_i
                 inputs = [t.to(self.device) for t in inputs]
 
                 if self.amp_backend == 'APEX' and self.fp16:
                     with amp.disable_casts():  # inference should be in FP32
-                        approx, target, loss, metric, extra = \
-                            self.batch_train(self.model, inputs,
-                                            self.criterion, self.eval_metric)
+                        approx, target, loss, metric, extra = self.batch_train(self, inputs)
 
                 else:
-                    approx, target, loss, metric, extra = \
-                        self.batch_train(self.model, inputs,
-                                        self.criterion, self.eval_metric)
+                    approx, target, loss, metric, extra = self.batch_train(self, inputs)
 
                 approxs.append(approx.clone().detach())
                 targets.append(target.clone().detach())
@@ -242,8 +233,7 @@ class TorchTrainer:
             extras = torch.cat(extras).cpu()
 
         metric_total, monitor_metrics_total = \
-            self.end_train_eval(approxs, targets, extras,
-                                self.eval_metric, self.monitor_metrics)
+            self.epoch_eval(self, approxs, targets, extras)
 
         ''' TensorBoard logging '''
         logs = [
@@ -281,9 +271,9 @@ class TorchTrainer:
                 inputs = [t.to(self.device) for t in inputs]
                 if self.amp_backend == 'APEX' and self.fp16:
                     with amp.disable_casts(): # inference should be in FP32
-                        approx = self.batch_test(self.model, inputs)
+                        approx = self.batch_test(self, inputs)
                 else:
-                    approx = self.batch_test(self.model, inputs)
+                    approx = self.batch_test(self, inputs)
                 prediction.append(approx.detach())
         
         prediction = torch.cat(prediction).cpu().numpy()
@@ -328,7 +318,7 @@ class TorchTrainer:
             # Essential
             criterion, optimizer, scheduler, loader, num_epochs, 
             loader_valid=None, loader_test=None, batch_scheduler=False, 
-            hook=SimpleTrainEval(), callbacks=[],
+            hook=SimpleHook(), callbacks=[],
             # Snapshot
             export_dir=None, resume=False, 
             # Special training
@@ -352,8 +342,8 @@ class TorchTrainer:
         self.tb_logger = tb_logger
         self.fp16 = fp16
         self.parallel = parallel
-        self._register_callbacks(callbacks) # self.before_train, self.after_train
-        self._register_hook(hook) # self.batch_train, self.batch_eval, self.batch_test
+        self._register_callbacks(callbacks)
+        self._register_hook(hook)
         # Important flags
         self.global_epoch = 1
         self.stop_train = False
@@ -392,7 +382,7 @@ class TorchTrainer:
         if eval_metric is None:
             self.logger(
                 'eval_metric is not set. Inversed criterion will be used instead.')
-        if not isinstance(self.monitor_metrics, (list, tuple, set)):
+        if not isinstance(self.monitor_metrics, (list, tuple)):
             self.monitor_metrics = [self.monitor_metrics]
 
         ''' Configure model '''
@@ -474,7 +464,6 @@ class TorchTrainer:
                     self.logger('Training stopped by overfit detector.')
                     break
 
-                ''' Not stopped '''
                 self.global_epoch += 1
             else:
                 ''' No early stop till the end '''
@@ -512,3 +501,17 @@ class TorchTrainer:
     def calibrate_model(self, loader):
         self.model = TemperatureScaler(self.model).to(self.device)
         self.model.set_temperature(loader)
+
+    def __repr__(self):
+        print_items = [
+            'device', 'device_ids', 
+            'optimizer', 'scheduler', 'criterion', 'eval_metric', 'monitor_metrics', 
+            'before_train', 'after_train', 'logger'
+        ]
+        print_text = f'TorchTrainer({self.serial})\n'
+        for item in print_items:
+            try:
+                print_text += f'{item}: {getattr(self, item)}\n'
+            except:
+                pass
+        return print_text

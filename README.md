@@ -103,11 +103,11 @@ kuma_utils work with both apex Python-only build and apex with CUDA/C++ extensio
     ┃   ┣ etc...
     ┃ 
     ┣ TorchTrainer              - PyTorch Wrapper.
-    ┣ EarlyStopping             - Early stopping for TorchTrainer (callback).
+    ┣ EarlyStopping             - Early stopping callback for TorchTrainer.
     ┣ TorchLogger               - Logger
     ┣ TensorBoardLogger         - TensorBoard Logger
-    ┣ SimpleTrainEval           - Simple inbatch hook for almost all the tasks
-    ┣ ArgumentSpecifiedHook     - Inbatch hook in case you need to pass multiple Xs to model and so on...
+    ┣ SimpleHook                - Simple in-batch hook for almost all the tasks.
+    ┣ ArgumentSpecifiedHook     - In-batch hook in case you need to pass multiple Xs to model and so on.
     ┣ TemperatureScaler         - Probability calibration for pytorch models.
 
 ```
