@@ -9,11 +9,14 @@ class HookTemplate:
     def __init__(self):
         pass
 
-    def batch_train(self, trainer, inputs):
+    def forward_train(self, trainer, inputs):
+        # return approx, target, loss, metric, extra
         pass
 
-    def batch_test(self, trainer, inputs):
+    def forward_test(self, trainer, inputs):
+        # return approx
         pass
 
-    def epoch_eval(self, trainer, approxs, targets, extras):
+    def evaluate_epoch(self, trainer, approxs, targets, extras):
+        # return metric_total, monitor_metrics_total
         pass

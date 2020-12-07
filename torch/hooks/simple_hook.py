@@ -6,7 +6,7 @@ class SimpleHook(HookTemplate):
     def __init__(self):
         super().__init__()
 
-    def batch_train(self, trainer, inputs):
+    def forward_train(self, trainer, inputs):
         ''' Forward '''
         target = inputs[-1]
         approx = trainer.model(inputs[0])
@@ -15,11 +15,11 @@ class SimpleHook(HookTemplate):
         extra = None
         return approx, target, loss, metric, extra
 
-    def batch_test(self, trainer, inputs):
+    def forward_test(self, trainer, inputs):
         approx = trainer.model(inputs[0])
         return approx
 
-    def epoch_eval(self, trainer, approxs, targets, extras):
+    def evaluate_epoch(self, trainer, approxs, targets, extras):
         if trainer.eval_metric is None:
             metric_total = None
         elif len(extras) > 0:

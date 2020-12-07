@@ -14,7 +14,7 @@ class ArgumentSpecifiedHook(HookTemplate):
         self.argument_to_criterion = argument_to_criterion
         self.argument_extra = argument_extra
 
-    def batch_train(self, trainer, inputs):
+    def forward_train(self, trainer, inputs):
         ''' Forward '''
         target = inputs[self.argument_target]
         approx = trainer.model(*[inputs[i] for i in self.argument_to_model])
@@ -30,11 +30,11 @@ class ArgumentSpecifiedHook(HookTemplate):
             extra = None
         return approx, target, loss, metric, extra
 
-    def batch_test(self, trainer, inputs):
+    def forward_test(self, trainer, inputs):
         approx = trainer.model(*[inputs[i] for i in self.argument_to_model])
         return approx
 
-    def epoch_eval(self, trainer, approxs, targets, extras):
+    def evaluate_epoch(self, trainer, approxs, targets, extras):
         if trainer.eval_metric is None:
             metric_total = None
         elif len(extras) > 0:

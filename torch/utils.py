@@ -1,4 +1,5 @@
 import torch
+import random
 try:
     import torch_xla
     import torch_xla.core.xla_model as xm
@@ -55,3 +56,9 @@ def get_device(arg):
             device_ids = [device.index]
     
     return device, device_ids
+
+
+def set_random_seeds(random_seed=0, deterministic=False):
+    torch.manual_seed(random_seed)
+    torch.backends.cudnn.deterministic = deterministic
+    random.seed(random_seed)
