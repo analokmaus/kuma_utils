@@ -14,10 +14,7 @@ import torch.nn as nn
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import RandomSampler, SequentialSampler
-from torch.utils.data.dataloader import _InfiniteConstantSampler
 from torch.utils.data.distributed import DistributedSampler
-
 
 from .utils import XLA, get_device, set_random_seeds
 from .tensorboard import DummyTensorBoardLogger
@@ -106,14 +103,15 @@ class TorchTrainer:
     def _configure_loader(self, loader):
         if loader is None:
             return None
-        if isinstance(
-                loader.sampler,
-                (RandomSampler, SequentialSampler, _InfiniteConstantSampler)):
-            loader._DataLoader__initialized = False
-            loader.sampler = DistributedSampler(loader.dataset)
-            loader.num_workers = 4
-            loader_DataLoader__initialized = True
-        return loader
+        skip_keys = ['sampler', 'batch_sampler', 'dataset_kind', 'num_workers']
+        dl_args = {
+            k: v for k, v in loader.__dict__.items() \
+                if not k.startswith('_') and k not in skip_keys
+        }
+        sampler = DistributedSampler(
+            loader.dataset, num_replicas=self.world_size, rank=self.rank)
+        dl_args['sampler'] = sampler
+        return type(loader)(**dl_args)
 
     def _train_one_epoch(self, loader):
         loss_total = .0
@@ -125,8 +123,8 @@ class TorchTrainer:
             scaler = amp.GradScaler()
 
         self.model.train()
-        if self.progress_bar:
-            iterator = enumerate(tqdm(loader))
+        if self.progress_bar and self.rank == 0:
+            iterator = enumerate(tqdm(loader, desc='train'))
         else:
             iterator = enumerate(loader)
 
@@ -134,7 +132,6 @@ class TorchTrainer:
             self.optimizer.zero_grad()
             batches_done = len(loader) * (self.global_epoch-1) + batch_i
             inputs = [t.to(self.device) for t in inputs]
-            # self.logger(f'{self.rank}: {inputs[1][:10]}')
 
             if self.amp_backend == 'AMP' and self.fp16:
                 with amp.autocast():
@@ -215,8 +212,8 @@ class TorchTrainer:
         extras = []
 
         self.model.eval()
-        if self.progress_bar:
-            iterator = enumerate(tqdm(loader))
+        if self.progress_bar and self.rank == 0:
+            iterator = enumerate(tqdm(loader, desc='valid'))
         else:
             iterator = enumerate(loader)
         
@@ -369,18 +366,19 @@ class TorchTrainer:
         dist.init_process_group(
             backend='nccl', init_method=dist_url,
             world_size=self.world_size, rank=rank)
+        comm.sync()
         torch.cuda.set_device(rank)
         self.logger(f'rank{rank} initialized.')
-        comm.sync()
 
         ''' Configure model and loader ''' 
         self.model = DistributedDataParallel(
-            self.model, device_ids=[rank], 
+            self.model.to(rank), device_ids=[rank], 
             broadcast_buffers=False,
             find_unused_parameters=True
-        ).to(rank)
+        )
         loader = self._configure_loader(loader)
-        loader_valid = self._configure_loader(loader_valid)
+        # loader_valid = self._configure_loader(loader_valid)
+        loader_valid.num_workers = 0
         self.logger(f'rank{rank} ready to train.')
 
         ''' Let's do it... '''
@@ -402,7 +400,7 @@ class TorchTrainer:
             ''' Training set '''
             loss_train, metric_train, monitor_metrics_train = \
                 self._train_one_epoch(loader)
-            self.logger(f'rank{rank}: train finished.')
+            # self.logger(f'rank{rank}: train finished.')
 
             ''' Validation set '''
             if loader_valid is None:
@@ -430,15 +428,16 @@ class TorchTrainer:
                     self.scheduler.step()
 
             ''' After train callbacks '''
-            for func in self.after_train + [self.logger._callback]:
+            after_trains = self.after_train + [self.logger._callback]
+            for func in after_trains:
                 func(CallbackEnv(self, epoch, state))
 
-            if self.checkpoint and rank == 0:
+            if self.checkpoint and self.rank == 0:
                 ''' Save model '''
                 self.save_snapshot()
                 self.checkpoint = False
 
-            if self.stop_train:
+            if self.stop_train and self.rank == 0:
                 ''' Early stop '''
                 self.logger('Training stopped by overfit detector.')
                 break
@@ -449,11 +448,15 @@ class TorchTrainer:
             if rank == 0:
                 self.save_snapshot()
         
+        dist.destroy_process_group()
+        
 
     def save_snapshot(self, path=None):
         if path is None:
             path = self.snapshot_path
-        if isinstance(self.model, torch.nn.DataParallel):
+        if isinstance(
+            self.model, 
+            (torch.nn.DataParallel, DistributedDataParallel)):
             module = self.model.module
         else:
             module = self.model
@@ -472,7 +475,7 @@ class TorchTrainer:
         checkpoint = torch.load(path, map_location=device)
         if isinstance(
                 self.model, 
-                (torch.nn.DataParallel, torch.nn.parallel.DistributedDataParallel)):
+                (torch.nn.DataParallel, DistributedDataParallel)):
             self.model.module.load_state_dict(checkpoint['model'])
         else:
             self.model.load_state_dict(checkpoint['model'])
@@ -573,6 +576,7 @@ class TorchTrainer:
         self.patience = 0
 
         if self.parallel == 'ddp':
+            self.model = self.model.cpu()
             dist_url = f'tcp://127.0.0.1:{comm.find_free_port()}'
             self.logger(f'DDP: {dist_url}')
             mp.spawn(
@@ -580,6 +584,7 @@ class TorchTrainer:
                 nprocs=self.world_size,
                 args=(dist_url, loader, loader_valid, num_epochs)
             )
+            self.model = self.model.to(self.device)
         else:
             self._train(loader, loader_valid, num_epochs)
 
