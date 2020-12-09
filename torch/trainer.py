@@ -1,9 +1,7 @@
-import time
-import os
-import sys
 from pathlib import Path
 from tqdm import tqdm
 from copy import copy, deepcopy
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -15,6 +13,7 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
+from torch.nn import SyncBatchNorm
 
 from .utils import XLA, get_device, set_random_seeds
 from .tensorboard import DummyTensorBoardLogger
@@ -43,6 +42,9 @@ class TorchTrainer:
     Simple Trainer for PyTorch models
     
     This is something similar to PyTorch Lightning, but this works with vanilla PyTorch modules.
+
+    TODO:
+    - DDP for xla device
     '''
 
     def __init__(self, 
@@ -57,6 +59,8 @@ class TorchTrainer:
         # Some implicit attributes
         self.apex_opt_level = 'O1'
         self.scheduler_target = None
+        self.convert_syncbatchnorm = True
+        self.average_loss_ddp = True
         self.amp_backend = 'AMP'
         self.progress_bar = False
 
@@ -116,9 +120,10 @@ class TorchTrainer:
     def _train_one_epoch(self, loader):
         loss_total = .0
         total_batch = len(loader.dataset) / loader.batch_size
-        approxs = []
-        targets = []
-        extras = []
+        # Storage
+        self.epoch_storage = defaultdict(list)
+        for key in ['approx', 'target', 'batch_metric']:
+            self.epoch_storage[key] = []
         if self.amp_backend == 'AMP' and self.fp16:
             scaler = amp.GradScaler()
 
@@ -135,17 +140,15 @@ class TorchTrainer:
 
             if self.amp_backend == 'AMP' and self.fp16:
                 with amp.autocast():
-                    approx, target, loss, metric, extra = \
-                        self.forward_train(self, inputs)
+                    approx, target, loss = self.forward_train(self, inputs)
                 approx = approx.float()
                 loss = loss / self.grad_accumulations
                 scaler.scale(loss).backward()
-                scaler.step(self.optimizer)
-                scaler.update()
-                
+                if (batch_i + 1) % self.grad_accumulations == 0:
+                    scaler.step(self.optimizer)
+                    scaler.update()
             else:
-                approx, target, loss, metric, extra = \
-                    self.forward_train(self, inputs)
+                approx, target, loss = self.forward_train(self, inputs)
                 loss = loss / self.grad_accumulations
                 if self.amp_backend == 'APEX' and self.fp16:
                     approx = approx.float()
@@ -153,45 +156,51 @@ class TorchTrainer:
                         scaled_loss.backward()
                 else:
                     loss.backward()
-
-            approxs.append(approx.clone().detach())
-            targets.append(target.clone().detach())
-            if extra is not None:
-                extras.append(extra.clone().detach())
-
-            if batch_i == 0:
-                # Save output dimension in the first run
-                self.out_dim = approx.shape[1:]
-
-            if (batch_i + 1) % self.grad_accumulations == 0:
-                if self.xla:
-                    xm.optimizer_step(self.optimizer, barrier=True)
-                else:
-                    self.optimizer.step()
-                if self.batch_scheduler:
-                    self.scheduler.step()
+                if (batch_i + 1) % self.grad_accumulations == 0:
+                    if self.xla:
+                        xm.optimizer_step(self.optimizer, barrier=True)
+                    else:
+                        self.optimizer.step()
+                    if self.batch_scheduler:
+                        self.scheduler.step()
 
             ''' TensorBoard logging '''
+            if self.parallel == 'ddp' and self.average_loss_ddp:
+                loss_batch = comm.gather_tensor(
+                    loss.detach().clone().view(1)).mean()
+            else: # Use loss on device: 0
+                loss_batch = loss.item()
             learning_rate = [ param_group['lr'] \
                 for param_group in self.optimizer.param_groups ]
             logs = [
-                ('batch_train_loss', loss.item()),
+                ('batch_train_loss', loss_batch),
                 ('batch_train_lr', learning_rate)
             ]
-            if metric is not None:
-                logs.append(('batch_train_mertric', metric))
+            if len(self.epoch_storage['batch_metric']) > 0:
+                metric = self.epoch_storage['batch_metric'][-1]
+                logs.append(('batch_valid_mertric', metric))
             self.tb_logger.list_of_scalars_summary(logs, batches_done)
 
             batch_weight = len(target) / loader.batch_size
-            loss_total += loss.item() / total_batch * batch_weight
+            loss_total += loss_batch / total_batch * batch_weight
 
-        approxs = torch.cat(approxs).cpu()
-        targets = torch.cat(targets).cpu()
-        if len(extras) > 0:
-            extras = torch.cat(extras).cpu()
+        for key, val in self.epoch_storage.items():
+            if len(val) > 0:
+                if isinstance(val[0], torch.Tensor):
+                    self.epoch_storage[key] = torch.cat(val)
+                else:
+                    self.epoch_storage[key] = torch.tensor(val).to(self.rank)
         
-        metric_total, monitor_metrics_total = \
-            self.evaluate_epoch(self, approxs, targets, extras)
+        if self.parallel == 'ddp':
+            ''' Gather tensors '''
+            for key, val in self.epoch_storage.items():
+                if len(val) > 0:
+                    self.epoch_storage[key] = comm.gather_tensor(val)
+
+            metric_total, monitor_metrics_total = self.evaluate_epoch(self)
+
+        else:
+            metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
         ''' TensorBoard logging '''
         logs = [
@@ -207,9 +216,10 @@ class TorchTrainer:
     def _valid_one_epoch(self, loader):
         loss_total = .0
         total_batch = len(loader.dataset) / loader.batch_size
-        approxs = []
-        targets = []
-        extras = []
+        # Storage
+        self.epoch_storage = defaultdict(list)
+        for key in ['approx', 'target', 'batch_metric']:
+            self.epoch_storage[key] = []
 
         self.model.eval()
         if self.progress_bar and self.rank == 0:
@@ -224,36 +234,47 @@ class TorchTrainer:
 
                 if self.amp_backend == 'APEX' and self.fp16:
                     with amp.disable_casts():  # inference should be in FP32
-                        approx, target, loss, metric, extra = \
+                        approx, target, loss = \
                             self.forward_train(self, inputs)
 
                 else:
-                    approx, target, loss, metric, extra = \
+                    approx, target, loss = \
                         self.forward_train(self, inputs)
 
-                approxs.append(approx.clone().detach())
-                targets.append(target.clone().detach())
-                if extra is not None:
-                    extras.append(extra.clone().detach())
-
                 ''' TensorBoard logging '''
+                if self.parallel == 'ddp' and self.average_loss_ddp:
+                    loss_batch = comm.gather_tensor(
+                        loss.detach().clone().view(1)).mean()
+                else: # Use loss on device: 0
+                    loss_batch = loss.item()
                 logs = [
-                    ('batch_valid_loss', loss.item()),
+                    ('batch_valid_loss', loss_batch),
                 ]
-                if metric is not None:
+                if len(self.epoch_storage['batch_metric']) > 0:
+                    metric = self.epoch_storage['batch_metric'][-1]
                     logs.append(('batch_valid_mertric', metric))
                 self.tb_logger.list_of_scalars_summary(logs, batches_done)
 
                 batch_weight = len(target) / loader.batch_size
-                loss_total += loss.item() / total_batch * batch_weight
+                loss_total += loss_batch / total_batch * batch_weight
 
-        approxs = torch.cat(approxs).cpu()
-        targets = torch.cat(targets).cpu()
-        if len(extras) > 0:
-            extras = torch.cat(extras).cpu()
+        for key, val in self.epoch_storage.items():
+            if len(val) > 0:
+                if isinstance(val[0], torch.Tensor):
+                    self.epoch_storage[key] = torch.cat(val)
+                else:
+                    self.epoch_storage[key] = torch.tensor(val).to(self.rank)
+        
+        if self.parallel == 'ddp':
+            ''' Gather tensors '''
+            for key, val in self.epoch_storage.items():
+                if len(val) > 0:
+                    self.epoch_storage[key] = comm.gather_tensor(val)
 
-        metric_total, monitor_metrics_total = \
-            self.evaluate_epoch(self, approxs, targets, extras)
+            metric_total, monitor_metrics_total = self.evaluate_epoch(self)
+
+        else:
+            metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
         ''' TensorBoard logging '''
         logs = [
@@ -268,7 +289,7 @@ class TorchTrainer:
         
     def predict(self, loader, path=None, test_time_augmentations=1, verbose=True):
         if loader is None:
-            self.logger('Loader is None. Nothing to predict.')
+            self.logger('Skipping prediction.')
             return None
 
         prediction = []
@@ -288,7 +309,7 @@ class TorchTrainer:
 
         if path is not None:
             np.save(path, prediction)
-        self.logger(f'Prediction done. exported to {path}')
+            self.logger(f'Prediction exported to {path}')
 
         return prediction
 
@@ -358,9 +379,6 @@ class TorchTrainer:
             self.save_snapshot()
 
     def _train_ddp(self, rank, dist_url, loader, loader_valid, num_epochs):
-        '''
-        WIP
-        '''
         set_random_seeds(0)
         self.rank = rank
         dist.init_process_group(
@@ -368,18 +386,20 @@ class TorchTrainer:
             world_size=self.world_size, rank=rank)
         comm.sync()
         torch.cuda.set_device(rank)
-        self.logger(f'rank{rank} initialized.')
+        self.logger(f'device[{rank}] initialized.')
 
         ''' Configure model and loader ''' 
+        if self.convert_syncbatchnorm:
+            self.model = SyncBatchNorm.convert_sync_batchnorm(self.model)
         self.model = DistributedDataParallel(
-            self.model.to(rank), device_ids=[rank], 
+            self.model.to(rank), device_ids=[rank],
             broadcast_buffers=False,
             find_unused_parameters=True
         )
+
         loader = self._configure_loader(loader)
-        # loader_valid = self._configure_loader(loader_valid)
-        loader_valid.num_workers = 0
-        self.logger(f'rank{rank} ready to train.')
+        loader_valid = self._configure_loader(loader_valid)
+        self.logger(f'device[{rank}] ready to train.')
 
         ''' Let's do it... '''
         state = {
@@ -400,7 +420,6 @@ class TorchTrainer:
             ''' Training set '''
             loss_train, metric_train, monitor_metrics_train = \
                 self._train_one_epoch(loader)
-            # self.logger(f'rank{rank}: train finished.')
 
             ''' Validation set '''
             if loader_valid is None:
@@ -429,6 +448,8 @@ class TorchTrainer:
 
             ''' After train callbacks '''
             after_trains = self.after_train + [self.logger._callback]
+            if self.rank != 0:
+                after_trains = after_trains[:-1]
             for func in after_trains:
                 func(CallbackEnv(self, epoch, state))
 
@@ -437,9 +458,10 @@ class TorchTrainer:
                 self.save_snapshot()
                 self.checkpoint = False
 
-            if self.stop_train and self.rank == 0:
+            if self.stop_train:
                 ''' Early stop '''
-                self.logger('Training stopped by overfit detector.')
+                if self.rank == 0:
+                    self.logger('Training stopped by overfit detector.')
                 break
 
             self.global_epoch += 1
@@ -450,7 +472,6 @@ class TorchTrainer:
         
         dist.destroy_process_group()
         
-
     def save_snapshot(self, path=None):
         if path is None:
             path = self.snapshot_path
@@ -466,6 +487,8 @@ class TorchTrainer:
             'model': module.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'scheduler': self.scheduler.state_dict(),
+            'best_epoch': self.best_epoch,
+            'best_score': self.best_score
         }, path)
 
     def load_snapshot(self, path, device=None, 
@@ -484,6 +507,8 @@ class TorchTrainer:
             self.scheduler.load_state_dict(checkpoint['scheduler'])
         if load_epoch:
             self.global_epoch = checkpoint['global_epoch']
+        self.best_epoch = checkpoint['best_epoch']
+        self.best_score = checkpoint['best_score']
 
     def train(self,
             # Essential
@@ -559,9 +584,10 @@ class TorchTrainer:
             self.monitor_metrics = [self.monitor_metrics]
 
         ''' Configure model '''
-        self.model.to(self.device)
+        if self.parallel != 'ddp':
+            self.model.to(self.device)
         if resume:
-            self.load_snapshot(snapshot_path)
+            self.load_snapshot(snapshot_path, 'cpu' if self.parallel == 'ddp' else None)
             self.logger(f'{snapshot_path} is loaded. Continuing from epoch {self.global_epoch}.')
         else:
             if snapshot_path.exists():
@@ -576,7 +602,6 @@ class TorchTrainer:
         self.patience = 0
 
         if self.parallel == 'ddp':
-            self.model = self.model.cpu()
             dist_url = f'tcp://127.0.0.1:{comm.find_free_port()}'
             self.logger(f'DDP: {dist_url}')
             mp.spawn(
@@ -589,13 +614,13 @@ class TorchTrainer:
             self._train(loader, loader_valid, num_epochs)
 
         ''' Prediction '''
-        self.logger(
-            f'Best epoch is [{self.best_epoch}], best score is [{self.best_score}].')
         if snapshot_path.exists():
             self.load_snapshot(
                 str(self.snapshot_path), load_epoch=False, load_scheduler=False)
         else:
             self.save_snapshot()
+        self.logger(
+            f'Best epoch is [{self.best_epoch}], best score is [{self.best_score}].')
 
         if calibrate_model:
             if loader_valid is None:

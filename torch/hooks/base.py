@@ -10,7 +10,7 @@ class HookTemplate:
         pass
 
     def forward_train(self, trainer, inputs):
-        # return approx, target, loss, metric, extra
+        # return approx, target, loss
         pass
 
     def forward_test(self, trainer, inputs):

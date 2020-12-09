@@ -22,6 +22,15 @@ def find_free_port():
     return port
 
 
+def gather_tensor(tensor):
+    world_size = dist.get_world_size()
+    if world_size == 1:
+        return tensor
+    tensor_list = [torch.zeros_like(tensor) for _ in range(world_size)]
+    dist.all_gather(tensor_list, tensor)
+    return torch.cat(tensor_list)
+
+
 def sync():
     if not dist.is_available() or dist.is_initialized():
         return
