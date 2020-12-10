@@ -15,7 +15,7 @@ Copy all the files to your working directory via:
 
 `git clone https://github.com/analokmaus/kuma_utils.git`
 
-See example notebooks below.
+See tutorial notebooks below.
 
 For compatibility, old version of kuma_utils can be found in branch `2019`. 
 Checkout to the branch via 
@@ -25,7 +25,8 @@ Checkout to the branch via
 as needed.
 
 ## WIP
-1. Distributed Data Parallel (DDP) support for TorchTrainer.
+1. Distributed Data Parallel (DDP) with DataLoader.num_workers > 0
+2. DDP for xla devices
 
 # Environment
 Create a new environment and:
@@ -116,7 +117,7 @@ kuma_utils work with both apex Python-only build and apex with CUDA/C++ extensio
 - [Exploratory data analysis](examples/Exploratory_data_analysis.ipynb)
 - [Data preprocessing](examples/Data_preprocessing.ipynb)
 - [Train and validate scikit-learn API models](examples/Train_and_validate_models.ipynb)
-- [Train CIFAR-10](examples/Train_CIFAR10.md)
+- [Train CIFAR-10 (TorchTrainer tutorial)](examples/Train_CIFAR10.md)
 
 
 # License

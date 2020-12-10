@@ -14,6 +14,8 @@ class TorchLogger:
                      'train_monitor', 'valid_monitor', 'learning_rate', 'patience'],
                  verbose_eval=1,
                  stdout=True, file=False):
+        if isinstance(log_items, str):
+            log_items = log_items.split(' ')
         self.path = path
         self.log_items = log_items
         self.verbose_eval = verbose_eval

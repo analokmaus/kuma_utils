@@ -25,6 +25,7 @@ class ArgumentSpecifiedHook(HookTemplate):
         else:
             loss = trainer.criterion(approx, target)
 
+        storage = trainer.epoch_storage
         if self.evaluate_batch:
             if self.argument_extra is not None:
                 metric = trainer.eval_metric(approx, target, inputs[self.argument_extra])
@@ -38,12 +39,14 @@ class ArgumentSpecifiedHook(HookTemplate):
                 else:
                     monitor_metrics_total.append(
                         monitor_metric(approx, target))
-            trainer.epoch_storage['batch_metric'].append(metric)
-            trainer.epoch_storage['batch_monitor'].append(monitor_metrics_total)
-        trainer.epoch_storage['approx'].append(approx)
-        trainer.epoch_storage['target'].append(target)
+            storage['batch_metric'].append(metric)
+            storage['batch_monitor'].append(monitor_metrics_total)
+        else:
+            storage['approx'].append(approx)
+            storage['target'].append(target)
         if self.argument_extra is not None:
-            trainer.epoch_storage['extra'].append(inputs[self.argument_extra])
+            storage['extra'].append(inputs[self.argument_extra])
+         # !: Do not add loss value to storage here.
         return approx, target, loss
 
     def forward_test(self, trainer, inputs):

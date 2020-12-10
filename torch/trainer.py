@@ -2,6 +2,7 @@ from pathlib import Path
 from tqdm import tqdm
 from copy import copy, deepcopy
 from collections import defaultdict
+import time
 
 import numpy as np
 import pandas as pd
@@ -48,7 +49,7 @@ class TorchTrainer:
     '''
 
     def __init__(self, 
-                 model, device=None, serial='Trainer'):
+                 model, device=None, serial='trainer0'):
         
         self.serial = serial
         self.device, self.device_ids = get_device(device)
@@ -56,13 +57,18 @@ class TorchTrainer:
         self.model = model
         self.rank = 0
 
-        # Some implicit attributes
+        ### Some implicit attributes
+        # AMP
         self.apex_opt_level = 'O1'
-        self.scheduler_target = None
+        self.amp_backend = 'AMP'
+        # DDP
         self.convert_syncbatchnorm = True
         self.average_loss_ddp = True
-        self.amp_backend = 'AMP'
+        self.ddp_workers = 0
+        # MISC
+        self.scheduler_target = None
         self.progress_bar = False
+        self.debug = False
 
     def _register_callbacks(self, callbacks):
         self.before_train = [func.before_train for func in callbacks]
@@ -107,7 +113,7 @@ class TorchTrainer:
     def _configure_loader(self, loader):
         if loader is None:
             return None
-        skip_keys = ['sampler', 'batch_sampler', 'dataset_kind', 'num_workers']
+        skip_keys = ['sampler', 'batch_sampler', 'dataset_kind']
         dl_args = {
             k: v for k, v in loader.__dict__.items() \
                 if not k.startswith('_') and k not in skip_keys
@@ -115,14 +121,20 @@ class TorchTrainer:
         sampler = DistributedSampler(
             loader.dataset, num_replicas=self.world_size, rank=self.rank)
         dl_args['sampler'] = sampler
+        dl_args['num_workers'] = self.ddp_workers
+        if dl_args['batch_size'] % self.world_size != 0:
+            raise ValueError(f'batch size must be a multiple of world size({self.world_size}).')
+        dl_args['batch_size'] = int(dl_args['batch_size'] / self.world_size)
         return type(loader)(**dl_args)
 
     def _train_one_epoch(self, loader):
-        loss_total = .0
-        total_batch = len(loader.dataset) / loader.batch_size
+        batch_weights = torch.ones(len(loader)).float().to(self.device)
+        if len(loader.dataset) % loader.batch_size != 0:
+            batch_weights[-1] = \
+                (len(loader.dataset) % loader.batch_size)  / loader.batch_size
         # Storage
         self.epoch_storage = defaultdict(list)
-        for key in ['approx', 'target', 'batch_metric']:
+        for key in ['approx', 'target', 'loss', 'batch_metric']:
             self.epoch_storage[key] = []
         if self.amp_backend == 'AMP' and self.fp16:
             scaler = amp.GradScaler()
@@ -167,7 +179,7 @@ class TorchTrainer:
             ''' TensorBoard logging '''
             if self.parallel == 'ddp' and self.average_loss_ddp:
                 loss_batch = comm.gather_tensor(
-                    loss.detach().clone().view(1)).mean()
+                    loss.detach().clone().view(1)).mean().item()
             else: # Use loss on device: 0
                 loss_batch = loss.item()
             learning_rate = [ param_group['lr'] \
@@ -181,8 +193,7 @@ class TorchTrainer:
                 logs.append(('batch_valid_mertric', metric))
             self.tb_logger.list_of_scalars_summary(logs, batches_done)
 
-            batch_weight = len(target) / loader.batch_size
-            loss_total += loss_batch / total_batch * batch_weight
+            self.epoch_storage['loss'].append(loss_batch)
 
         for key, val in self.epoch_storage.items():
             if len(val) > 0:
@@ -191,6 +202,8 @@ class TorchTrainer:
                 else:
                     self.epoch_storage[key] = torch.tensor(val).to(self.rank)
         
+        loss_total = ((self.epoch_storage['loss'] * batch_weights).sum() / batch_weights.sum()).item()
+
         if self.parallel == 'ddp':
             ''' Gather tensors '''
             for key, val in self.epoch_storage.items():
@@ -214,11 +227,13 @@ class TorchTrainer:
         return loss_total, metric_total, monitor_metrics_total
 
     def _valid_one_epoch(self, loader):
-        loss_total = .0
-        total_batch = len(loader.dataset) / loader.batch_size
+        batch_weights = torch.ones(len(loader)).float().to(self.device)
+        if len(loader.dataset) % loader.batch_size != 0:
+            batch_weights[-1] = \
+                (len(loader.dataset) % loader.batch_size)  / loader.batch_size
         # Storage
         self.epoch_storage = defaultdict(list)
-        for key in ['approx', 'target', 'batch_metric']:
+        for key in ['approx', 'target', 'loss', 'batch_metric']:
             self.epoch_storage[key] = []
 
         self.model.eval()
@@ -244,7 +259,7 @@ class TorchTrainer:
                 ''' TensorBoard logging '''
                 if self.parallel == 'ddp' and self.average_loss_ddp:
                     loss_batch = comm.gather_tensor(
-                        loss.detach().clone().view(1)).mean()
+                        loss.detach().clone().view(1)).mean().item()
                 else: # Use loss on device: 0
                     loss_batch = loss.item()
                 logs = [
@@ -255,8 +270,7 @@ class TorchTrainer:
                     logs.append(('batch_valid_mertric', metric))
                 self.tb_logger.list_of_scalars_summary(logs, batches_done)
 
-                batch_weight = len(target) / loader.batch_size
-                loss_total += loss_batch / total_batch * batch_weight
+                self.epoch_storage['loss'].append(loss_batch)
 
         for key, val in self.epoch_storage.items():
             if len(val) > 0:
@@ -264,6 +278,8 @@ class TorchTrainer:
                     self.epoch_storage[key] = torch.cat(val)
                 else:
                     self.epoch_storage[key] = torch.tensor(val).to(self.rank)
+
+        loss_total = ((self.epoch_storage['loss'] * batch_weights).sum() / batch_weights.sum()).item()
         
         if self.parallel == 'ddp':
             ''' Gather tensors '''
@@ -294,9 +310,13 @@ class TorchTrainer:
 
         prediction = []
 
+        if self.progress_bar and self.rank == 0:
+            iterator = tqdm(loader, desc='inference')
+        else:
+            iterator = loader
         self.model.eval()
         with torch.no_grad():
-            for inputs in loader:
+            for inputs in iterator:
                 inputs = [t.to(self.device) for t in inputs]
                 if self.amp_backend == 'APEX' and self.fp16:
                     with amp.disable_casts(): # inference should be in FP32
@@ -376,7 +396,8 @@ class TorchTrainer:
             self.global_epoch += 1
         else:
             ''' No early stop till the end '''
-            self.save_snapshot()
+            if not self.snapshot_path.exists():
+                self.save_snapshot()
 
     def _train_ddp(self, rank, dist_url, loader, loader_valid, num_epochs):
         set_random_seeds(0)
@@ -448,7 +469,7 @@ class TorchTrainer:
 
             ''' After train callbacks '''
             after_trains = self.after_train + [self.logger._callback]
-            if self.rank != 0:
+            if self.rank != 0 and not self.debug:
                 after_trains = after_trains[:-1]
             for func in after_trains:
                 func(CallbackEnv(self, epoch, state))
@@ -467,7 +488,7 @@ class TorchTrainer:
             self.global_epoch += 1
         else:
             ''' No early stop till the end '''
-            if rank == 0:
+            if not self.snapshot_path.exists() and rank == 0:
                 self.save_snapshot()
         
         dist.destroy_process_group()
@@ -560,7 +581,7 @@ class TorchTrainer:
             export_dir = Path(export_dir).expanduser()
         assert len(export_dir.suffix) == 0  # export_dir must be directory
         export_dir.mkdir(parents=True, exist_ok=True)
-        snapshot_path = export_dir / 'snapshot.pt'
+        snapshot_path = export_dir / f'{self.serial}.pt'
         self.snapshot_path = snapshot_path
 
         ''' Configure loggers '''
@@ -603,22 +624,25 @@ class TorchTrainer:
 
         if self.parallel == 'ddp':
             dist_url = f'tcp://127.0.0.1:{comm.find_free_port()}'
-            self.logger(f'DDP: {dist_url}')
+            self.logger(f'DDP on {dist_url}')
             mp.spawn(
                 self._train_ddp, 
                 nprocs=self.world_size,
                 args=(dist_url, loader, loader_valid, num_epochs)
             )
+            # procs = []
+            # for rank in range(self.world_size):
+            #     p = mp.Process(target=self._train_ddp, 
+            #                    args=(rank, dist_url, loader, loader_valid, num_epochs))
+            #     p.start()
+            #     procs.append(p)
             self.model = self.model.to(self.device)
         else:
             self._train(loader, loader_valid, num_epochs)
 
         ''' Prediction '''
-        if snapshot_path.exists():
-            self.load_snapshot(
-                str(self.snapshot_path), load_epoch=False, load_scheduler=False)
-        else:
-            self.save_snapshot()
+        self.load_snapshot(
+            str(self.snapshot_path), load_epoch=False, load_scheduler=False)
         self.logger(
             f'Best epoch is [{self.best_epoch}], best score is [{self.best_score}].')
 

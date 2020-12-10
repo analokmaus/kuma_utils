@@ -21,8 +21,10 @@ class SimpleHook(HookTemplate):
                     monitor_metric(approx, target))
             storage['batch_metric'].append(metric)
             storage['batch_monitor'].append(monitor_metrics_total)
-        storage['approx'].append(approx)
-        storage['target'].append(target)
+        else:
+            storage['approx'].append(approx)
+            storage['target'].append(target)
+        # !: Do not add loss value to storage here.
         return approx, target, loss
 
     def forward_test(self, trainer, inputs):
