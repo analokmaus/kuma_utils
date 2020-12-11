@@ -1,12 +1,4 @@
-from dataclasses import dataclass, field
 from typing import Any
-
-
-@dataclass(frozen=True)
-class CallbackEnv:
-    trainer: Any = None
-    epoch: int = None
-    results: dict = field(default_factory=dict)
 
 
 class CallbackTemplate:

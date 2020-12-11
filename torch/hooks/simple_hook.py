@@ -9,7 +9,7 @@ class SimpleHook(HookTemplate):
 
     def forward_train(self, trainer, inputs):
         target = inputs[-1]
-        approx = trainer.model(inputs[0])
+        approx = trainer.model(*inputs[:-1])
         loss = trainer.criterion(approx, target)
         
         storage = trainer.epoch_storage
@@ -25,7 +25,7 @@ class SimpleHook(HookTemplate):
             storage['approx'].append(approx)
             storage['target'].append(target)
         # !: Do not add loss value to storage here.
-        return approx, target, loss
+        return loss
 
     def forward_test(self, trainer, inputs):
         approx = trainer.model(inputs[0])

@@ -27,6 +27,8 @@ as needed.
 ## WIP
 1. Distributed Data Parallel (DDP) with DataLoader.num_workers > 0
 2. DDP for xla devices
+3. Add function to export state history as DataFrame for TorchTrainer
+4. Parallel prediction for DDP
 
 # Environment
 Create a new environment and:
@@ -38,15 +40,10 @@ Create a new environment and:
 ### Category Encoders
 `pip install category_encoders`
 ### **PyTorch**
+For mixed precision training, you must install version `>= 1.6.0` . 
 Follow [official instructions](https://pytorch.org/get-started/locally/).
 ### Pytorch/XLA
 Follow [official instructions](https://github.com/pytorch/xla).
-### NVIDIA apex
-In case you want to use kuma_utils on old PyTorch < 1.6.0 and 
-use mixed precision training, you will need to install NVIDIA apex.
-
-Follow [official instructions](https://github.com/NVIDIA/apex). 
-kuma_utils work with both apex Python-only build and apex with CUDA/C++ extensions. 
 ### japanize-matplotlib
 `pip install japanize-matplotlib`
 

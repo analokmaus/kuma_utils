@@ -47,7 +47,7 @@ class ArgumentSpecifiedHook(HookTemplate):
         if self.argument_extra is not None:
             storage['extra'].append(inputs[self.argument_extra])
          # !: Do not add loss value to storage here.
-        return approx, target, loss
+        return loss
 
     def forward_test(self, trainer, inputs):
         approx = trainer.model(*[inputs[i] for i in self.argument_to_model])

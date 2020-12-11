@@ -36,7 +36,7 @@ import torch.utils.data as D
 import torch.optim as optim
 
 from kuma_utils.torch import TorchTrainer, TorchLogger, EarlyStopping
-from kuma_utils.torch.hooks import SimpleHook, ArgumentSpecifiedHook
+from kuma_utils.torch.hooks import SimpleHook
 from kuma_utils.torch.model_zoo import se_resnext50_32x4d
 from kuma_utils.metrics import Accuracy
 
@@ -74,122 +74,128 @@ def get_model(num_classes):
     model.last_linear = nn.Linear(in_features, num_classes)
     return model
 
-cfg = Config(
-    num_workers=32, 
-    batch_size=2048,
-    num_epochs=20,
-    early_stopping_rounds=5,
-)
 
-train, test = get_dataset()
-print('classes', train.classes)
+if __name__ == "__main__":
 
-predictions = []
-splitter = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
-for fold, (train_idx, valid_idx) in enumerate(
-    splitter.split(train.targets, train.targets)):
-
-    print(f'fold{fold} starting')
-
-    valid_fold = split_dataset(train, valid_idx)
-    train_fold = split_dataset(train, train_idx)
-
-    print(f'train: {len(train_fold)} / valid: {len(valid_fold)}')
-
-    loader_train = D.DataLoader(
-        train_fold, batch_size=cfg.batch_size, num_workers=cfg.num_workers, 
-        shuffle=True, pin_memory=True)
-    loader_valid = D.DataLoader(
-        valid_fold, batch_size=cfg.batch_size, num_workers=cfg.num_workers, 
-        shuffle=False, pin_memory=True)
-    loader_test = D.DataLoader(
-        test, batch_size=cfg.batch_size, num_workers=cfg.num_workers, 
-        shuffle=False, pin_memory=True)
-
-    model = get_model(num_classes=len(train.classes))
-    optimizer = optim.Adam(model.parameters(), lr=2e-3)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=2)
-    
-    trn = TorchTrainer(model, serial=f'fold{fold}')
-    trn.scheduler_target = 'valid_metric' # ReduceLROnPlateau reads metric each epoch
-    trn.progress_bar = True # Progress bar shows batches done
-    trn.train(
-        loader=loader_train,
-        loader_valid=loader_valid,
-        loader_test=loader_test,
-        criterion=nn.CrossEntropyLoss(),
-        eval_metric=Accuracy().torch, 
-        monitor_metrics=[
-            Accuracy().torch
-        ],
-        optimizer=optimizer,
-        scheduler=scheduler,
-        num_epochs=cfg.num_epochs,
-        hook=SimpleHook(evaluate_batch=False),
-        callbacks=[
-            EarlyStopping(
-                patience=cfg.early_stopping_rounds, 
-                target='valid_metric', 
-                maximize=True)
-        ],
-        logger=TorchLogger(
-            path=f'results/demo/fold{fold}', 
-            log_items='epoch train_loss valid_loss valid_metric learning_rate patience', 
-            file=True), 
-        export_dir='results/demo',
-        parallel='ddp',
-        fp16=True
+    cfg = Config(
+        num_workers=32, 
+        batch_size=2048,
+        num_epochs=20,
+        early_stopping_rounds=5,
     )
 
-    oof = trn.outoffold
-    predictions.append(trn.prediction)
+    train, test = get_dataset()
+    print('classes', train.classes)
+    
+    predictions = []
+    splitter = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
+    for fold, (train_idx, valid_idx) in enumerate(
+        splitter.split(train.targets, train.targets)):
 
-    break
+        print(f'fold{fold} starting')
+
+        valid_fold = split_dataset(train, valid_idx)
+        train_fold = split_dataset(train, train_idx)
+
+        print(f'train: {len(train_fold)} / valid: {len(valid_fold)}')
+
+        loader_train = D.DataLoader(
+            train_fold, batch_size=cfg.batch_size, num_workers=cfg.num_workers, 
+            shuffle=True, pin_memory=True)
+        loader_valid = D.DataLoader(
+            valid_fold, batch_size=cfg.batch_size, num_workers=cfg.num_workers, 
+            shuffle=False, pin_memory=True)
+        loader_test = D.DataLoader(
+            test, batch_size=cfg.batch_size, num_workers=cfg.num_workers, 
+            shuffle=False, pin_memory=True)
+
+        model = get_model(num_classes=len(train.classes))
+        optimizer = optim.Adam(model.parameters(), lr=2e-3)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='max', factor=0.5, patience=2)
+        logger = TorchLogger(
+            path='results/demo/log', 
+            log_items='epoch train_loss valid_loss valid_metric learning_rate early_stop', 
+            file=True)
+        
+        trn = TorchTrainer(model, serial=f'fold{fold}')
+        trn.scheduler_target = 'valid_metric' # ReduceLROnPlateau reads metric each epoch
+        trn.progress_bar = True # Progress bar shows batches done
+        trn.train(
+            loader=loader_train,
+            loader_valid=loader_valid,
+            loader_test=loader_test,
+            criterion=nn.CrossEntropyLoss(),
+            eval_metric=Accuracy().torch, 
+            monitor_metrics=[
+                Accuracy().torch
+            ],
+            optimizer=optimizer,
+            scheduler=scheduler,
+            num_epochs=cfg.num_epochs,
+            hook=SimpleHook(evaluate_batch=False),
+            callbacks=[
+                EarlyStopping(
+                    patience=cfg.early_stopping_rounds, 
+                    target='valid_metric', 
+                    maximize=True)
+            ],
+            logger=logger, 
+            export_dir='results/demo',
+            parallel='ddp',
+            fp16=True
+        )
+
+        oof = trn.outoffold
+        predictions.append(trn.prediction)
+
+        score = Accuracy()(valid_fold.targets, oof)
+        print(f'Folf{fold} score: {score:.6f}')
+        break
 ```
 ## Results
 ```
 classes ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
 fold0 starting
 train: 40000 / valid: 10000
-TorchLogger created at 20/12/10:08:50:15
-08:50:15 Mixed precision training on torch amp.
-08:50:15 DistributedDataParallel on devices [0, 1, 2, 3]
-08:50:15 Model is on cuda
-08:50:15 DDP on tcp://127.0.0.1:49051
-08:50:23 device[1] initialized.
-08:50:27 device[2] initialized.
-08:50:31 device[0] initialized.
-08:50:31 device[3] initialized.
-08:50:37 device[0] ready to train.
-08:50:37 device[3] ready to train.
-08:50:37 device[2] ready to train.
-08:50:37 device[1] ready to train.
-train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:17<00:00,  1.17it/s]
-valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  3.70it/s]
-08:50:55 Epoch  1/20 | train_loss=1.335771 | valid_loss=7.963142 | valid_metric=0.567400 | learning_rate=[0.002000] | 
-train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:16<00:00,  1.22it/s]
-valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  3.48it/s]
-08:51:14 Epoch  2/20 | train_loss=0.555175 | valid_loss=0.658680 | valid_metric=0.787800 | learning_rate=[0.002000] | 
-train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:17<00:00,  1.15it/s]
-valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  3.58it/s]
-08:51:34 Epoch  3/20 | train_loss=0.262158 | valid_loss=0.704435 | valid_metric=0.797100 | learning_rate=[0.002000] | 
-train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:15<00:00,  1.26it/s]
-valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  3.57it/s]
+TorchLogger created at 20/12/11:07:11:15
+07:11:15 DDP on tcp://127.0.0.1:35563
+07:11:31 All processes initialized.
+07:11:31 Mixed precision training on torch amp.
+07:11:34 DistributedDataParallel on devices [0, 1, 2, 3]
+train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:09<00:00,  2.16it/s]
+valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  4.13it/s]
+07:11:44 Epoch  1/20 | train_loss=1.437213 | valid_loss=5.349814 | valid_metric=0.555800 | learning_rate=0.002000 |  | 
+train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:08<00:00,  2.27it/s]
+valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  4.29it/s]
+07:11:55 Epoch  2/20 | train_loss=0.576135 | valid_loss=0.640557 | valid_metric=0.794100 | learning_rate=0.002000 |  | 
+train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:08<00:00,  2.26it/s]
+valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  4.03it/s]
+07:12:06 Epoch  3/20 | train_loss=0.273112 | valid_loss=0.754993 | valid_metric=0.783700 | learning_rate=0.002000 | (*1) | 
+train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:08<00:00,  2.26it/s]
+valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  4.14it/s]
 ...
-08:56:11 Epoch 18/20 | train_loss=0.006254 | valid_loss=0.713796 | valid_metric=0.857000 | learning_rate=[0.001000] | 
-train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:17<00:00,  1.15it/s]
-valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  3.57it/s]
-08:56:31 Epoch 19/20 | train_loss=0.001824 | valid_loss=0.729091 | valid_metric=0.862800 | learning_rate=[0.001000] | 
-train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:17<00:00,  1.15it/s]
-valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  3.40it/s]
-08:56:51 Epoch 20/20 | train_loss=0.000750 | valid_loss=0.756801 | valid_metric=0.861000 | learning_rate=[0.001000] | (*1)
-08:56:58 Best epoch is [19], best score is [0.8628].
-inference: 100%|██████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:04<00:00,  1.18it/s]
-inference: 100%|██████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:03<00:00,  1.30it/s]
+...
+07:14:36 Epoch 17/20 | train_loss=0.000053 | valid_loss=0.873186 | valid_metric=0.856700 | learning_rate=0.001000 |  | 
+train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:08<00:00,  2.34it/s]
+valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  4.29it/s]
+07:14:47 Epoch 18/20 | train_loss=0.000046 | valid_loss=0.881786 | valid_metric=0.856900 | learning_rate=0.001000 |  | 
+train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:09<00:00,  2.22it/s]
+valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  4.36it/s]
+07:14:58 Epoch 19/20 | train_loss=0.000040 | valid_loss=0.889885 | valid_metric=0.857100 | learning_rate=0.001000 |  | 
+train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:08<00:00,  2.24it/s]
+valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  4.40it/s]
+07:15:10 Epoch 20/20 | train_loss=0.000036 | valid_loss=0.897552 | valid_metric=0.857000 | learning_rate=0.001000 | (*1) | 
+07:15:13 Best epoch is [19], best score is [0.8571].
+inference: 100%|██████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:02<00:00,  2.00it/s]
+inference: 100%|██████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:02<00:00,  2.24it/s]
+Folf0 score: 0.857100
 ```
 
 # Module description
+## `kuma_utils.torch.TorchTrainer`
+WIP
+
 ## `kuma_utils.torch.EarlyStopping`
 ```python
 # Sample
@@ -214,7 +220,7 @@ TorchLogger(
     path: (str, pathlib.Path),
     log_items: (list, str) = [
         'epoch', 'train_loss', 'valid_loss', 'train_metric', 'valid_metric',
-        'train_monitor', 'valid_monitor', 'learning_rate', 'patience'
+        'train_monitor', 'valid_monitor', 'learning_rate', 'early_stop'
         ],
     verbose_eval: int = 1,
     stdout: bool = True, 
@@ -224,7 +230,7 @@ TorchLogger(
 | argument     | description                                                                                                                                                                                                        |
 |--------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | path         | Path to export log.                                                                                                                                                                                                |
-| log_items    | Items to be shown in log. Must be a combination of the following items:  `['epoch',  'train_loss', 'valid_loss', 'train_metric' , 'valid_metric', 'train_monitor',  'valid_monitor', 'learning_rate', 'patience']` |
+| log_items    | Items to be shown in log. Must be a combination of the following items:  `['epoch',  'train_loss', 'valid_loss', 'train_metric' , 'valid_metric', 'train_monitor',  'valid_monitor', 'learning_rate', 'early_stop']` |
 | verbose_eval | How often (unit: epoch) to log                                                                                                                                                                                     |
 | stdout       | Print log to stdout.                                                                                                                                                                                               |
 | file         | Write log to the path. (False by default)                                                                                                                                                                          |
@@ -247,7 +253,7 @@ class SampleHook:
         loss = trainer.criterion(approx, target)
         storage['approx'].append(approx)
         storage['target'].append(target)
-        return approx, target, loss
+        return loss
 
     def forward_test(self, trainer, inputs):
         approx = trainer.model(inputs[0])
@@ -263,11 +269,14 @@ class SampleHook:
                 monitor_metric(storage['approx'], storage['target']))
         return metric_total, monitor_metrics_total
 ```
-`.forward_train()` is called in each mini-batch in training and validation loop.
+`.forward_train()` is called in each mini-batch in training and validation loop. 
+This method returns loss tensor.
 
-`.forward_test()` is called in each mini-batch in inference loop.
+`.forward_test()` is called in each mini-batch in inference loop. 
+This method returns prediction values tensor.
 
-`.evaluate_epoch()` is called at the end of each training and validation loop.
+`.evaluate_epoch()` is called at the end of each training and validation loop. 
+This method returns eval_metric (scaler) and monitor metrics (list).
 
 Note that `trainer.epoch_storage` is a dicationary object you can use freely. 
 In `SampleHook`,  predictions and targets are added to storage in each mini-batch, 
