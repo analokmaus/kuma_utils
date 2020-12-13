@@ -104,8 +104,7 @@ Follow [official instructions](https://github.com/pytorch/xla).
     ┣ EarlyStopping             - Early stopping callback for TorchTrainer.
     ┣ TorchLogger               - Logger
     ┣ TensorBoardLogger         - TensorBoard Logger
-    ┣ SimpleHook                - Simple in-batch hook for almost all the tasks.
-    ┣ ArgumentSpecifiedHook     - In-batch hook in case you need to pass multiple Xs to model and so on.
+    ┣ SimpleHook                - Simple train hook for almost all the tasks (see tutorial).
     ┣ TemperatureScaler         - Probability calibration for pytorch models.
 
 ```

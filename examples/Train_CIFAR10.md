@@ -230,10 +230,10 @@ TorchLogger(
 | argument     | description                                                                                                                                                                                                        |
 |--------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | path         | Path to export log.                                                                                                                                                                                                |
-| log_items    | Items to be shown in log. Must be a combination of the following items:  `['epoch',  'train_loss', 'valid_loss', 'train_metric' , 'valid_metric', 'train_monitor',  'valid_monitor', 'learning_rate', 'early_stop']` |
-| verbose_eval | How often (unit: epoch) to log                                                                                                                                                                                     |
-| stdout       | Print log to stdout.                                                                                                                                                                                               |
-| file         | Write log to the path. (False by default)                                                                                                                                                                          |
+| log_items    | Items to be shown in log. Must be a combination of the following items:  `['epoch',  'train_loss', 'valid_loss', 'train_metric' , 'valid_metric', 'train_monitor',  'valid_monitor', 'learning_rate', 'early_stop']`. List or string separated by space (e.g. `'epoch valid_loss learning_rate'`).| 
+| verbose_eval | Frequency of log (unit: epoch).                                                                                                                                                                              |
+| stdout       | Whether to print log.                                                                                                                                                                            |
+| file         | Whether to export log file to the path. (False by default)                                                                                                                                                                          |
 
 
 ## Hook
@@ -281,7 +281,7 @@ This method returns eval_metric (scaler) and monitor metrics (list).
 Note that `trainer.epoch_storage` is a dicationary object you can use freely. 
 In `SampleHook`,  predictions and targets are added to storage in each mini-batch, 
 and at the end of loop, metrics are calculated on the whole dataset 
-(tensors are concatenated automatically).
+(tensors are concatenated batch-wise automatically).
 
 ## Callback
 TODO

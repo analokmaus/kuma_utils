@@ -19,7 +19,7 @@ def freeze_module(module):
 def get_device(arg):
     if isinstance(arg, torch.device) or \
         (XLA and isinstance(arg, xm.xla_device)):
-        pass
+        device = arg
     elif arg is None or isinstance(arg, (list, tuple)):
         if XLA:
             device = xm.xla_device()

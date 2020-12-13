@@ -17,6 +17,6 @@ class HookTemplate:
         # return approx
         pass
 
-    def evaluate_epoch(self, trainer, approxs, targets, extras):
+    def evaluate_epoch(self, trainer):
         # return metric_total, monitor_metrics_total
         pass

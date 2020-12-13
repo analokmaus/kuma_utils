@@ -110,6 +110,7 @@ class TorchTrainer:
 
         else: # Single 
             self.model.to(self.device)
+            self.logger(f'Model on {self.device}')
  
     def _configure_loader_ddp(self, loader, shuffle=True):
         if loader is None:
@@ -195,7 +196,7 @@ class TorchTrainer:
                 if isinstance(val[0], torch.Tensor):
                     self.epoch_storage[key] = torch.cat(val)
                 else:
-                    self.epoch_storage[key] = torch.tensor(val).to(self.rank)
+                    self.epoch_storage[key] = torch.tensor(val).to(self.device)
         
         loss_total = ((self.epoch_storage['loss'] * batch_weights).sum() / batch_weights.sum()).item()
 
@@ -261,7 +262,7 @@ class TorchTrainer:
                 if isinstance(val[0], torch.Tensor):
                     self.epoch_storage[key] = torch.cat(val)
                 else:
-                    self.epoch_storage[key] = torch.tensor(val).to(self.rank)
+                    self.epoch_storage[key] = torch.tensor(val).to(self.device)
 
         loss_total = ((self.epoch_storage['loss'] * batch_weights).sum() / batch_weights.sum()).item()
         
@@ -325,6 +326,7 @@ class TorchTrainer:
                 after_trains = after_trains[:-1]
             for func in after_trains:
                 func(self)
+            self._states.append(self.state.copy())
 
             if self.checkpoint and self.rank == 0:
                 ''' Save model '''
@@ -407,7 +409,8 @@ class TorchTrainer:
             'model': module.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'scheduler': self.scheduler.state_dict(),
-            'state': self.state
+            'state': self.state, 
+            'all_states': self._states
         }, path)
 
     def load_snapshot(self, path, device=None, 
@@ -427,6 +430,7 @@ class TorchTrainer:
         if load_epoch:
             self.global_epoch = checkpoint['global_epoch']
         self.state = checkpoint['state']
+        self._states = checkpoint['all_states']
 
     def train(self,
             # Essential
@@ -519,6 +523,7 @@ class TorchTrainer:
             'epoch': 0, 
             'learning_rate': [group['lr'] for group in self.optimizer.param_groups][0]
         }
+        self._states = []
 
         if self.parallel == 'ddp':
             dist_url = f'tcp://127.0.0.1:{comm.find_free_port()}'
@@ -566,6 +571,9 @@ class TorchTrainer:
     def calibrate_model(self, loader):
         self.model = TemperatureScaler(self.model).to(self.device)
         self.model.set_temperature(loader)
+
+    def export_dataframe(self):
+        return pd.DataFrame(self._states)
 
     def __repr__(self):
         print_items = [
