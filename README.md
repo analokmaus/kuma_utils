@@ -25,10 +25,8 @@ Checkout to the branch via
 as needed.
 
 ## WIP
-1. Distributed Data Parallel (DDP) with DataLoader.num_workers > 0
-2. DDP for xla devices
-3. Add function to export state history as DataFrame for TorchTrainer
-4. Parallel prediction for DDP
+1. DDP for xla devices
+2. Parallel prediction for DDP
 
 # Environment
 Create a new environment and:

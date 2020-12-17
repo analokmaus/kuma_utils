@@ -3,6 +3,10 @@ from tqdm import tqdm
 from copy import copy, deepcopy
 from collections import defaultdict
 import time
+import pickle
+import subprocess
+import inspect
+import sys
 
 import numpy as np
 import pandas as pd
@@ -17,7 +21,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn import SyncBatchNorm
 
 from .utils import XLA, get_device, set_random_seeds
-from .tensorboard import DummyTensorBoardLogger
+from .tb_logger import DummyTensorBoardLogger
 from .temperature_scaling import TemperatureScaler
 from .callbacks import TorchLogger, EarlyStopping
 from .hooks import SimpleHook
@@ -28,6 +32,9 @@ try:
     AMP = True
 except ModuleNotFoundError:
     AMP = False
+
+
+DDP_TMP_PATH = Path('.ddp_torch_tmp')
 
 
 class TorchTrainer:
@@ -54,7 +61,7 @@ class TorchTrainer:
         # DDP
         self.ddp_sync_batch_norm = True
         self.ddp_average_loss = True
-        self.ddp_workers = 0
+        self.ddp_workers = -1
         # MISC
         self.scheduler_target = None
         self.progress_bar = False
@@ -123,7 +130,10 @@ class TorchTrainer:
         sampler = DistributedSampler(
             loader.dataset, num_replicas=self.world_size, rank=self.rank, shuffle=shuffle)
         dl_args['sampler'] = sampler
-        dl_args['num_workers'] = self.ddp_workers
+        if self.ddp_workers == -1:
+            dl_args['num_workers'] = int(dl_args['num_workers'] / self.world_size) 
+        else:
+            dl_args['num_workers'] = self.ddp_workers
         if dl_args['batch_size'] % self.world_size != 0:
             raise ValueError(f'batch size must be a multiple of world size({self.world_size}).')
         dl_args['batch_size'] = int(dl_args['batch_size'] / self.world_size)
@@ -134,6 +144,11 @@ class TorchTrainer:
         if len(loader.dataset) % loader.batch_size != 0:
             batch_weights[-1] = \
                 (len(loader.dataset) % loader.batch_size)  / loader.batch_size
+        #
+        loader_time = .0
+        train_time = .0
+        curr_time = time.time()
+        #
         # Storage
         self.epoch_storage = defaultdict(list)
         for key in ['approx', 'target', 'loss', 'batch_metric']:
@@ -148,6 +163,9 @@ class TorchTrainer:
             iterator = enumerate(loader)
 
         for batch_i, inputs in iterator:
+            loader_time += time.time() - curr_time
+            curr_time = time.time()
+
             self.optimizer.zero_grad()
             batches_done = len(loader) * (self.global_epoch-1) + batch_i
             inputs = [t.to(self.device) for t in inputs]
@@ -190,6 +208,12 @@ class TorchTrainer:
             self.tb_logger.list_of_scalars_summary(logs, batches_done)
 
             self.epoch_storage['loss'].append(loss_batch)
+
+            train_time += time.time() - curr_time
+            curr_time = time.time()
+
+        if self.debug and self.rank == 0:
+            self.logger(f'loader: {loader_time:.1f} s | train: {train_time:.1f} s')
 
         for key, val in self.epoch_storage.items():
             if len(val) > 0:
@@ -287,6 +311,10 @@ class TorchTrainer:
 
     def _train(self, loader, loader_valid, num_epochs):
         for epoch in range(num_epochs):
+            if self.parallel == 'ddp':
+                loader.sampler.set_epoch(epoch)
+                loader_valid.sampler.set_epoch(epoch)
+
             ''' before train callbacks '''
             for func in self.before_train:
                 func(self)
@@ -528,12 +556,37 @@ class TorchTrainer:
         if self.parallel == 'ddp':
             dist_url = f'tcp://127.0.0.1:{comm.find_free_port()}'
             self.logger(f'DDP on {dist_url}')
-            mp.spawn(
-                self._train_ddp, 
-                nprocs=self.world_size,
-                args=(dist_url, loader, loader_valid, num_epochs)
-            )
-            # !: Prediction is done by single GPU. 
+            
+            ddp_tmp = {
+                'trainer': self,
+                'dist_url': dist_url, 
+                'loader': loader, 
+                'loader_valid': loader_valid,
+                'num_epochs': num_epochs
+            }
+            with open(DDP_TMP_PATH, 'wb') as f:
+                pickle.dump(ddp_tmp, f)
+            # ddp_worker_path = 'kuma_utils/torch/ddp_worker.py'
+            ddp_worker_path = Path(inspect.getfile(self.__class__)).parent/'ddp_worker.py'
+            ddp_procs = []
+            for rank in range(self.world_size):
+                command = ['python', ddp_worker_path, '--path', DDP_TMP_PATH, '--rank', str(rank)]
+                proc = subprocess.Popen(command)
+                ddp_procs.append(proc)
+                delay = np.random.uniform(1, 5, 1)[0]
+                time.sleep(delay)
+            ddp_procs[0].wait()
+            DDP_TMP_PATH.unlink()
+
+            ### DDP spawn
+            # mp.spawn(
+            #     self._train_ddp, 
+            #     nprocs=self.world_size,
+            #     args=(dist_url, loader, loader_valid, num_epochs)
+            # )
+            ###  
+            
+            # !: Prediction is done by single GPU.
             # TODO: multi GPU prediction in DDP
             self.model = self.model.to(self.device)
         else:
