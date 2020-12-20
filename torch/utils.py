@@ -3,10 +3,7 @@ import random
 try:
     import torch_xla
     import torch_xla.core.xla_model as xm
-    if len(xm.get_xla_supported_devices()) > 0:
-        XLA = True
-    else:
-        XLA = False
+    XLA = True
 except ModuleNotFoundError:
     XLA = False
 
@@ -27,18 +24,16 @@ def get_device(arg):
             device = torch.device(
                 'cuda' if torch.cuda.is_available() else 'cpu')
     elif isinstance(arg, str):
-        device = torch.device(arg)
-
+        if arg == 'xla' and XLA:
+            device = xm.xla_device()
+        else:
+            device = torch.device(arg)
+    
     if isinstance(arg, (list, tuple)):
         if isinstance(arg[0], int):
             device_ids = list(arg)
-        elif isinstance(arg[0], str):
-            if arg[0].isnumeric():
-                device_ids = [ int(a) for a in arg ]
-            elif ':' in arg[0]:
-                device_ids = [ int(a.split(':')[-1]) for a in arg ]
-            else:
-                raise ValueError(f'Invalid device: {arg}')
+        elif isinstance(arg[0], str) and arg[0].isnumeric():
+             device_ids = [ int(a) for a in arg ]
         else:
             raise ValueError(f'Invalid device: {arg}')
     else:

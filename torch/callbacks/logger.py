@@ -52,7 +52,9 @@ class TorchLogger:
                 log_str += f'{env.max_epochs:-{num_len}}'
             elif item == 'early_stop':
                 if env.state['patience'] > 0:
-                    log_str += f'(*{env.state["patience"]})'
+                    best_score = env.state['best_score']
+                    counter = env.state['patience']
+                    log_str += f'best={best_score:.6f}(*{counter})'
             else:
                 val = env.state[item]
                 if val is None:
