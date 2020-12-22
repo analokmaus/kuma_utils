@@ -119,8 +119,6 @@ if __name__ == "__main__":
             file=True)
         
         trn = TorchTrainer(model, serial=f'fold{fold}')
-        trn.scheduler_target = 'valid_metric' # ReduceLROnPlateau reads metric each epoch
-        trn.progress_bar = True # Progress bar shows batches done
         trn.train(
             loader=loader_train,
             loader_valid=loader_valid,
@@ -132,6 +130,7 @@ if __name__ == "__main__":
             ],
             optimizer=optimizer,
             scheduler=scheduler,
+            scheduler_target='valid_loss', # ReduceLROnPlateau reads metric each epoch
             num_epochs=cfg.num_epochs,
             hook=SimpleHook(evaluate_batch=False),
             callbacks=[
@@ -143,11 +142,12 @@ if __name__ == "__main__":
             logger=logger, 
             export_dir='results/demo',
             parallel='ddp',
-            fp16=True
+            fp16=True,
+            progress_bar=True # Progress bar shows batches done
         )
 
-        oof = trn.outoffold
-        predictions.append(trn.prediction)
+        oof = trn.predict(valid_loader)
+        predictions.append(trn.predict(test_loader))
 
         score = Accuracy()(valid_fold.targets, oof)
         print(f'Folf{fold} score: {score:.6f}')
@@ -186,9 +186,6 @@ valid: 100%|██████████████████████�
 train: 100%|████████████████████████████████████████████████████████████████████████████████████████████████| 20/20 [00:08<00:00,  2.24it/s]
 valid: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:01<00:00,  4.40it/s]
 07:15:10 Epoch 20/20 | train_loss=0.000036 | valid_loss=0.897552 | valid_metric=0.857000 | learning_rate=0.001000 | (*1) | 
-07:15:13 Best epoch is [19], best score is [0.8571].
-inference: 100%|██████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:02<00:00,  2.00it/s]
-inference: 100%|██████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:02<00:00,  2.24it/s]
 Folf0 score: 0.857100
 ```
 
@@ -196,7 +193,7 @@ Folf0 score: 0.857100
 ## `kuma_utils.torch.TorchTrainer`
 WIP
 
-## `kuma_utils.torch.EarlyStopping`
+## `kuma_utils.torch.callbacks.EarlyStopping`
 ```python
 # Sample
 EarlyStopping(

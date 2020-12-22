@@ -1,5 +1,6 @@
 import torch
 import random
+import subprocess
 try:
     import torch_xla
     import torch_xla.core.xla_model as xm
@@ -57,3 +58,27 @@ def set_random_seeds(random_seed=0, deterministic=False):
     torch.manual_seed(random_seed)
     torch.backends.cudnn.deterministic = deterministic
     random.seed(random_seed)
+
+
+def get_gpu_memory():
+    """
+    Code borrowed from: 
+    https://discuss.pytorch.org/t/access-gpu-memory-usage-in-pytorch/3192/4
+
+    Get the current gpu usage.
+
+    Returns
+    -------
+    usage: dict
+        Keys are device ids as integers.
+        Values are memory usage as integers in MB.
+    """
+    result = subprocess.check_output(
+        [
+            'nvidia-smi', '--query-gpu=memory.used',
+            '--format=csv,nounits,noheader'
+        ], encoding='utf-8')
+    # Convert lines into a dictionary
+    gpu_memory = [int(x) for x in result.strip().split('\n')]
+    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
+    return gpu_memory_map

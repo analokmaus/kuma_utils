@@ -23,13 +23,15 @@ class EarlyStopping(CallbackTemplate):
             'best_epoch': None
         }
 
-    def after_train(self, env):
+    def after_epoch(self, env):
         score = env.state[self.state['target']]
-        epoch = env.state['epoch']
-        if epoch <= self.state['skip_epoch']:
+        epoch = env.state['epoch'] # local epoch
+        if epoch < self.state['skip_epoch']:
             self.state['best_score'] = score
             self.state['best_epoch'] = env.global_epoch
             env.checkpoint = True
+            env.state['best_score'] = self.state['best_score']
+            env.state['best_epoch'] = self.state['best_epoch']
         else:
             if (self.state['maximize'] and score > self.state['best_score']) or \
                     (not self.state['maximize'] and score < self.state['best_score']):
@@ -41,8 +43,8 @@ class EarlyStopping(CallbackTemplate):
                 env.state['best_epoch'] = self.state['best_epoch']
             else:
                 self.state['counter'] += 1
-            env.state['patience'] = self.state['counter']
 
+            env.state['patience'] = self.state['counter']
             if self.state['counter'] >= self.state['patience']:
                 env.stop_train = True
 

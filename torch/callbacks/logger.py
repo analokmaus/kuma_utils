@@ -2,6 +2,8 @@ import time
 from pathlib import Path
 import pandas as pd
 
+from ..utils import get_gpu_memory
+
 
 def get_time(time_format='%H:%M:%S'):
     return time.strftime(time_format, time.gmtime())
@@ -40,7 +42,8 @@ class TorchLogger:
             with open(self.path, 'a') as f:
                 f.write(log_str + '\n')
 
-    def _callback(self, env):
+    def after_epoch(self, env):
+        ''' callback '''
         epoch = env.state['epoch']
         if epoch % self.verbose_eval != 0:
             return
@@ -51,10 +54,14 @@ class TorchLogger:
                 log_str += f'Epoch {env.global_epoch:-{num_len}}/'
                 log_str += f'{env.max_epochs:-{num_len}}'
             elif item == 'early_stop':
-                if env.state['patience'] > 0:
-                    best_score = env.state['best_score']
-                    counter = env.state['patience']
+                best_score = env.state['best_score']
+                counter = env.state['patience']
+                if counter > 0:
                     log_str += f'best={best_score:.6f}(*{counter})'
+            elif item == 'gpu_memory':
+                log_str += 'gpu_mem='
+                for gpu_i, gpu_mem in get_gpu_memory().items():
+                    log_str += f'({gpu_i}:{int(gpu_mem)}MB)'
             else:
                 val = env.state[item]
                 if val is None:

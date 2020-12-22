@@ -25,8 +25,7 @@ Checkout to the branch via
 as needed.
 
 ## WIP
-1. DDP for xla devices
-2. Parallel prediction for DDP
+1. Parallel prediction for DDP
 
 # Environment
 Create a new environment and:

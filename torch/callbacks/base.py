@@ -9,10 +9,13 @@ class CallbackTemplate:
     def __init__(self):
         pass
 
-    def before_train(self, env):
+    def before_epoch(self, env):
         pass
 
-    def after_train(self, env):
+    def after_epoch(self, env):
+        pass
+
+    def in_batch(self, env):
         pass
 
     def state_dict(self):

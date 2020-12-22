@@ -51,9 +51,6 @@ class TorchTrainer:
     Simple Trainer for PyTorch models
     
     This is something similar to PyTorch Lightning, but this works with vanilla PyTorch modules.
-
-    TODO:
-    - DDP for xla device
     '''
 
     def __init__(self,
@@ -65,6 +62,7 @@ class TorchTrainer:
         self.world_size = len(self.device_ids)
         self.model = model
         self.rank = 0
+        self._ready_to_train = False
 
         ### Some implicit attributes
         # DDP
@@ -73,13 +71,11 @@ class TorchTrainer:
         self.ddp_sync_last = False
         self.ddp_workers = -1
         # MISC
-        self.scheduler_target = None
-        self.progress_bar = False
         self.debug = False
 
     def _register_callbacks(self, callbacks):
-        self.before_train = [func.before_train for func in callbacks]
-        self.after_train = [func.after_train for func in callbacks]
+        self.before_epoch = [func.before_epoch for func in callbacks]
+        self.after_epoch = [func.after_epoch for func in callbacks]
 
     def _register_hook(self, hook):
         self.forward_train = hook.forward_train
@@ -104,7 +100,7 @@ class TorchTrainer:
                 self.logger(f'Model on {self.device}')
 
         elif self.parallel == 'dp':
-            self.model = nn.parallel.DataParallel(
+            self.model = DataParallel(
                 self.model, device_ids=self.device_ids).to(self.device)
             self.logger(f'DataParallel on devices {self.device_ids}')
 
@@ -126,6 +122,8 @@ class TorchTrainer:
         else:  # Single
             self.model.to(self.device)
             self.logger(f'Model on {self.device}')
+        
+        self._ready_to_train = True
 
     def _configure_loader_ddp(self, loader, shuffle=True):
         if loader is None:
@@ -246,7 +244,7 @@ class TorchTrainer:
                 else:
                     self.epoch_storage[key] = torch.tensor(val).to(self.device)
 
-        loss_total = self.epoch_storage['loss'].mean()
+        loss_total = self.epoch_storage['loss'].mean().item()
 
         if self.parallel == 'ddp':
             ''' Gather tensors '''
@@ -315,7 +313,7 @@ class TorchTrainer:
                 else:
                     self.epoch_storage[key] = torch.tensor(val).to(self.device)
 
-        loss_total = self.epoch_storage['loss'].mean()
+        loss_total = self.epoch_storage['loss'].mean().item()
 
         if self.parallel == 'ddp':
             ''' Gather tensors '''
@@ -340,20 +338,21 @@ class TorchTrainer:
         return loss_total, metric_total, monitor_metrics_total
 
     def _train(self, loader, loader_valid, num_epochs):
+        assert self._ready_to_train
         for epoch in range(num_epochs):
             if self.parallel == 'ddp' and not self.xla:
                 loader.sampler.set_epoch(epoch)
                 loader_valid.sampler.set_epoch(epoch)
 
-            ''' before train callbacks '''
-            for func in self.before_train:
+            ''' before epoch callbacks '''
+            for func in self.before_epoch:
                 func(self)
 
-            ''' Training set '''
+            ''' Training loop '''
             loss_train, metric_train, monitor_metrics_train = \
                 self._train_one_epoch(loader)
 
-            ''' Validation set '''
+            ''' Validation loop '''
             if loader_valid is None:
                 loss_valid, metric_valid, monitor_metrics_valid = \
                     None, None, None
@@ -378,8 +377,8 @@ class TorchTrainer:
                 else:
                     self.scheduler.step()
 
-            ''' After train callbacks '''
-            after_trains = self.after_train + [self.logger._callback]
+            ''' After epoch callbacks '''
+            after_trains = self.after_epoch + [self.logger.after_epoch]
             if self.rank != 0 and not self.debug:
                 after_trains = after_trains[:-1]
             for func in after_trains:
@@ -437,29 +436,28 @@ class TorchTrainer:
             loader_valid.per_device_loader(self.device),
             num_epochs)
 
-    def predict(self, loader, path=None, test_time_augmentations=1, verbose=True):
-        if loader is None:
-            self.logger('Skipping prediction.')
-            return None
+    def predict(self, 
+                loader, hook=SimpleHook(), parallel=None, 
+                progress_bar=False):
+        self._register_hook(hook)
+        self.parallel = parallel
+        if not self._ready_to_train: # is model configured?
+            if self.parallel == 'dp':
+                self._configure_model()
+                # DDP prediction is not implemented
 
-        prediction = []
-
-        if self.progress_bar and self.rank == 0:
+        if progress_bar:
             iterator = tqdm(loader, desc='inference')
         else:
             iterator = loader
+        prediction = []
         self.model.eval()
         with torch.no_grad():
             for inputs in iterator:
                 inputs = [t.to(self.device) for t in inputs]
                 approx = self.forward_test(self, inputs)
                 prediction.append(approx.detach())
-
         prediction = torch.cat(prediction).cpu().numpy()
-
-        if path is not None:
-            np.save(path, prediction)
-            self.logger(f'Prediction exported to {path}')
 
         return prediction
 
@@ -517,7 +515,8 @@ class TorchTrainer:
     def train(self,
               # Essential
               criterion, optimizer, scheduler, loader, num_epochs,
-              loader_valid=None, loader_test=None, batch_scheduler=False,
+              loader_valid=None, loader_test=None, 
+              batch_scheduler=False, scheduler_target=None, 
               hook=SimpleHook(), callbacks=[],
               # Snapshot
               export_dir=None, resume=False,
@@ -526,16 +525,15 @@ class TorchTrainer:
               grad_accumulations=1, calibrate_model=False,
               # Evaluation
               eval_metric=None, monitor_metrics=[],
-              # Prediction
-              test_time_augmentations=1, predict_valid=True, predict_test=True,
               # Logger
-              logger=None, tb_logger=None
+              logger=None, tb_logger=None, progress_bar=False, 
               ):
         # Register params
         self.criterion = criterion
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.batch_scheduler = batch_scheduler
+        self.scheduler_target = scheduler_target
         self.grad_accumulations = grad_accumulations
         self.eval_metric = eval_metric
         self.monitor_metrics = monitor_metrics
@@ -543,6 +541,7 @@ class TorchTrainer:
         self.tb_logger = tb_logger
         self.fp16 = fp16
         self.parallel = parallel
+        self.progress_bar = progress_bar
         self._register_callbacks(callbacks)
         self._register_hook(hook)
         # Important flags
@@ -641,15 +640,9 @@ class TorchTrainer:
                     delay = np.random.uniform(1, 5, 1)[0]
                     time.sleep(delay)
                 ddp_procs[0].wait()
+                for proc in ddp_procs:
+                    proc.kill()
                 DDP_TMP_PATH.unlink()
-
-                ### DDP spawn
-                # mp.spawn(
-                #     self._train_ddp,
-                #     nprocs=self.world_size,
-                #     args=(dist_url, loader, loader_valid, num_epochs)
-                # )
-                ###
 
             # !: Prediction is done by single GPU.
             # TODO: multi GPU prediction in DDP
@@ -657,32 +650,6 @@ class TorchTrainer:
         else:
             self._configure_model()
             self._train(loader, loader_valid, num_epochs)
-
-        ''' Prediction '''
-        self.load_snapshot(
-            str(self.snapshot_path), load_epoch=False, load_scheduler=False)
-        best_epoch = self.state['best_epoch']
-        best_score = self.state['best_score']
-        self.logger(
-            f'Best epoch is [{best_epoch}], best score is [{best_score}].')
-
-        if calibrate_model:
-            if loader_valid is None:
-                raise ValueError(
-                    'loader_valid is necessary for calibration.')
-            else:
-                self.calibrate_model(loader_valid)
-
-        if predict_valid:
-            if loader_valid is None:
-                self.outoffold = self.predict(
-                    loader, test_time_augmentations=test_time_augmentations)
-            else:
-                self.outoffold = self.predict(
-                    loader_valid, test_time_augmentations=test_time_augmentations)
-        if predict_test:
-            self.prediction = self.predict(
-                loader_test, test_time_augmentations=test_time_augmentations)
 
     fit = train  # for compatibility
 
