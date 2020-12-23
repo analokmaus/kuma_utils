@@ -25,7 +25,7 @@ Checkout to the branch via
 as needed.
 
 ## WIP
-1. Parallel prediction for DDP
+1. Multi-node DDP
 
 # Environment
 Create a new environment and:

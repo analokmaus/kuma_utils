@@ -7,6 +7,7 @@ import pickle
 import subprocess
 import inspect
 import sys
+import os
 
 import numpy as np
 import pandas as pd
@@ -20,7 +21,7 @@ from torch.nn.parallel import DataParallel, DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn import SyncBatchNorm
 
-from .utils import get_device, set_random_seeds
+from .utils import get_device, set_random_seeds, get_time
 from .tb_logger import DummyTensorBoardLogger
 from .temperature_scaling import TemperatureScaler
 from .callbacks import TorchLogger, EarlyStopping
@@ -41,9 +42,6 @@ try:
     XLA = True
 except ModuleNotFoundError:
     XLA = False
-
-
-DDP_TMP_PATH = Path('.ku_ddp_tmp')
 
 
 class TorchTrainer:
@@ -442,9 +440,11 @@ class TorchTrainer:
         self._register_hook(hook)
         self.parallel = parallel
         if not self._ready_to_train: # is model configured?
-            if self.parallel == 'dp':
+            if parallel == 'ddp':
+                raise NotImplementedError('DDP prediction is not implemented.')
+            else:
                 self._configure_model()
-                # DDP prediction is not implemented
+                
 
         if progress_bar:
             iterator = tqdm(loader, desc='inference')
@@ -515,7 +515,6 @@ class TorchTrainer:
     def train(self,
               # Essential
               criterion, optimizer, scheduler, loader, num_epochs,
-              loader_valid=None, loader_test=None, 
               batch_scheduler=False, scheduler_target=None, 
               hook=SimpleHook(), callbacks=[],
               # Snapshot
@@ -524,7 +523,7 @@ class TorchTrainer:
               fp16=False, parallel=None,
               grad_accumulations=1, calibrate_model=False,
               # Evaluation
-              eval_metric=None, monitor_metrics=[],
+              loader_valid=None, eval_metric=None, monitor_metrics=[],
               # Logger
               logger=None, tb_logger=None, progress_bar=False, 
               ):
@@ -627,31 +626,35 @@ class TorchTrainer:
                     'loader_valid': loader_valid,
                     'num_epochs': num_epochs
                 }
-                with open(DDP_TMP_PATH, 'wb') as f:
+                ddp_tmp_path = Path(f'.ku_ddp_tmp_{get_time("%H%M%S")}')
+                with open(ddp_tmp_path, 'wb') as f:
                     pickle.dump(ddp_tmp, f)
                 ddp_worker_path = Path(inspect.getfile(
                     self.__class__)).parent/'ddp_worker.py'
-                ddp_procs = []
-                for rank in range(self.world_size):
-                    command = ['python', ddp_worker_path, '--path',
-                               DDP_TMP_PATH, '--rank', str(rank)]
-                    proc = subprocess.Popen(command)
-                    ddp_procs.append(proc)
-                    delay = np.random.uniform(1, 5, 1)[0]
-                    time.sleep(delay)
-                ddp_procs[0].wait()
-                for proc in ddp_procs:
-                    proc.kill()
-                DDP_TMP_PATH.unlink()
-
-            # !: Prediction is done by single GPU.
-            # TODO: multi GPU prediction in DDP
-            self.model = self.model.to(self.device)
+                env_copy = os.environ.copy()
+                env_copy['OMP_NUM_THREADS'] = '1'
+                command = [
+                    'python',
+                    '-m', 'torch.distributed.launch',
+                    '--nproc_per_node', str(self.world_size), 
+                    ddp_worker_path,
+                    '--path', ddp_tmp_path,
+                ]
+                proc = subprocess.Popen(command, env=env_copy)
+                proc.wait()
+                ddp_tmp_path.unlink()
         else:
             self._configure_model()
             self._train(loader, loader_valid, num_epochs)
 
+        try:
+            self.load_snapshot(self.snapshot_path)
+        except:
+            self.load_snapshot(self.load_snapshot, 'cpu')
+
     fit = train  # for compatibility
+    load_checkpoint = load_snapshot
+    save_checkpoint = save_snapshot
 
     def calibrate_model(self, loader):
         self.model = TemperatureScaler(self.model).to(self.device)

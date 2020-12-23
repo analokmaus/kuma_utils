@@ -1,6 +1,7 @@
 import torch
 import random
 import subprocess
+import time
 try:
     import torch_xla
     import torch_xla.core.xla_model as xm
@@ -82,3 +83,7 @@ def get_gpu_memory():
     gpu_memory = [int(x) for x in result.strip().split('\n')]
     gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
     return gpu_memory_map
+
+
+def get_time(time_format='%H:%M:%S'):
+    return time.strftime(time_format, time.gmtime())

@@ -1,12 +1,7 @@
-import time
 from pathlib import Path
 import pandas as pd
 
-from ..utils import get_gpu_memory
-
-
-def get_time(time_format='%H:%M:%S'):
-    return time.strftime(time_format, time.gmtime())
+from ..utils import get_gpu_memory, get_time
 
 
 class TorchLogger:

@@ -21,7 +21,7 @@ def ddp_worker(path, rank):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--rank', type=int, required=True)
+    parser.add_argument('--local_rank', type=int, required=True)
     parser.add_argument('--path', type=str, required=True)
     opt = parser.parse_args()
-    ddp_worker(opt.path, opt.rank)
+    ddp_worker(opt.path, opt.local_rank)
