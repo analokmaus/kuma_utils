@@ -24,7 +24,7 @@ from torch.nn import SyncBatchNorm
 from .utils import get_device, set_random_seeds, get_time
 from .tb_logger import DummyTensorBoardLogger
 from .temperature_scaling import TemperatureScaler
-from .callbacks import TorchLogger, EarlyStopping
+from .callbacks import TorchLogger, EarlyStopping, DummyLogger
 from .hooks import SimpleHook
 from . import distributed as comm
 
@@ -60,7 +60,8 @@ class TorchTrainer:
         self.world_size = len(self.device_ids)
         self.model = model
         self.rank = 0
-        self._ready_to_train = False
+        self._model_ready = False
+        self._hook_ready = False
 
         ### Some implicit attributes
         # DDP
@@ -79,6 +80,7 @@ class TorchTrainer:
         self.forward_train = hook.forward_train
         self.forward_test = hook.forward_test
         self.evaluate_epoch = hook.evaluate_epoch
+        self._hook_ready = True
 
     def _configure_model(self):
         ''' Mixed precision '''
@@ -92,17 +94,19 @@ class TorchTrainer:
                     self.logger('No mixed precision training backend found.')
 
         ''' Parallel training '''
-        if self.xla:  # DDP
+        if self.xla:  # DDP on xla
             self.model.to(self.device)
             if self.rank == 0:
                 self.logger(f'Model on {self.device}')
 
-        elif self.parallel == 'dp':
+        elif self.parallel == 'dp': # DP on cuda
             self.model = DataParallel(
                 self.model, device_ids=self.device_ids).to(self.device)
+            if hasattr(self, 'criterion'):
+                self.criterion = self.criterion.to(self.device)
             self.logger(f'DataParallel on devices {self.device_ids}')
 
-        elif self.parallel == 'ddp':
+        elif self.parallel == 'ddp': # DDP on cuda
             if self.ddp_sync_batch_norm:
                 self.model = SyncBatchNorm.convert_sync_batchnorm(self.model)
             self.model = DistributedDataParallel(
@@ -110,6 +114,8 @@ class TorchTrainer:
                 broadcast_buffers=False,
                 find_unused_parameters=True
             )
+            if hasattr(self, 'criterion'):
+                self.criterion = self.criterion.to(self.rank)
             if self.rank == 0:
                 self.logger(
                     f'DistributedDataParallel on devices {self.device_ids}')
@@ -117,11 +123,13 @@ class TorchTrainer:
         elif self.parallel is not None:
             raise ValueError(f'Unknown type of parallel {self.parallel}')
 
-        else:  # Single
+        else:  # Single device
             self.model.to(self.device)
+            if hasattr(self, 'criterion'):
+                self.criterion = self.criterion.to(self.device)
             self.logger(f'Model on {self.device}')
         
-        self._ready_to_train = True
+        self._model_ready = True
 
     def _configure_loader_ddp(self, loader, shuffle=True):
         if loader is None:
@@ -258,6 +266,9 @@ class TorchTrainer:
         else:
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
+        if metric_total is None:
+            metric_total = loss_total
+
         ''' TensorBoard logging '''
         logs = [
             ('epoch_train_loss', loss_total),
@@ -327,6 +338,9 @@ class TorchTrainer:
         else:
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
+        if metric_total is None:
+            metric_total = loss_total
+
         ''' TensorBoard logging '''
         logs = [
             ('epoch_valid_loss', loss_total),
@@ -336,7 +350,8 @@ class TorchTrainer:
         return loss_total, metric_total, monitor_metrics_total
 
     def _train(self, loader, loader_valid, num_epochs):
-        assert self._ready_to_train
+        assert self._model_ready
+        assert self._hook_ready
         for epoch in range(num_epochs):
             if self.parallel == 'ddp' and not self.xla:
                 loader.sampler.set_epoch(epoch)
@@ -434,18 +449,18 @@ class TorchTrainer:
             loader_valid.per_device_loader(self.device),
             num_epochs)
 
-    def predict(self, 
-                loader, hook=SimpleHook(), parallel=None, 
-                progress_bar=False):
-        self._register_hook(hook)
+    def predict(self, loader, hook=SimpleHook(), parallel=None, progress_bar=False):
         self.parallel = parallel
-        if not self._ready_to_train: # is model configured?
+        if not self._hook_ready:
+            self._register_hook(hook)
+        if not self._model_ready: # is model configured?
+            self.fp16 = False
+            self.logger = DummyLogger('')
             if parallel == 'ddp':
                 raise NotImplementedError('DDP prediction is not implemented.')
             else:
                 self._configure_model()
                 
-
         if progress_bar:
             iterator = tqdm(loader, desc='inference')
         else:
@@ -504,10 +519,11 @@ class TorchTrainer:
             self.model.module.load_state_dict(checkpoint['model'])
         else:
             self.model.load_state_dict(checkpoint['model'])
-        self.optimizer.load_state_dict(checkpoint['optimizer'])
-        if load_scheduler:
+        if hasattr(self, 'optimizer'):
+            self.optimizer.load_state_dict(checkpoint['optimizer'])
+        if hasattr(self, 'scheduler') and load_scheduler:
             self.scheduler.load_state_dict(checkpoint['scheduler'])
-        if load_epoch:
+        if hasattr(self, 'global_epoch') and load_epoch:
             self.global_epoch = checkpoint['global_epoch']
         self.state = checkpoint['state']
         self._states = checkpoint['all_states']
@@ -517,14 +533,13 @@ class TorchTrainer:
               criterion, optimizer, scheduler, loader, num_epochs,
               batch_scheduler=False, scheduler_target=None, 
               hook=SimpleHook(), callbacks=[],
-              # Snapshot
-              export_dir=None, resume=False,
-              # Special training
-              fp16=False, parallel=None,
-              grad_accumulations=1, calibrate_model=False,
               # Evaluation
               loader_valid=None, eval_metric=None, monitor_metrics=[],
-              # Logger
+              # Snapshot
+              export_dir=None, resume=False,
+              # Training option
+              fp16=False, parallel=None, grad_accumulations=1,
+              # Logging
               logger=None, tb_logger=None, progress_bar=False, 
               ):
         # Register params
@@ -575,7 +590,7 @@ class TorchTrainer:
         ''' Configure loss function and metrics '''
         if eval_metric is None:
             self.logger(
-                'eval_metric is not set. Inversed criterion will be used instead.')
+                'eval_metric is not set. criterion will be used.')
         if not isinstance(self.monitor_metrics, (list, tuple)):
             self.monitor_metrics = [self.monitor_metrics]
 

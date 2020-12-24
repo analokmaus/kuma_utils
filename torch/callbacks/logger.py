@@ -76,3 +76,15 @@ class TorchLogger:
         if self.file:
             with open(self.path, 'a') as f:
                 f.write(log_str + '\n')
+
+
+class DummyLogger:
+
+    def __init__(self, path):
+        pass
+
+    def __call__(self, log_str):
+        pass
+
+    def after_epoch(self, env):
+        pass
