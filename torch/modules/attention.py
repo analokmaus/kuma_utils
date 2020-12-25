@@ -51,20 +51,40 @@ class CBAM2d(nn.Module):
         return x
 
 
-class Attention3d(nn.Module):
+class MultiInstanceAttention(nn.Module):
+    '''
+    Implementation of: 
+    Attention-based Multiple Instance Learning
+    https://arxiv.org/abs/1802.04712
+    '''
 
-    def __init__(self, in_planes, return_mask=False):
+    def __init__(self, feature_size, instance_size,
+                 num_classes=1, hidden_size=512, gated_attention=False):
         super().__init__()
 
-        self.ch_pool = ChannelPool(dim=2, concat=False)
-        self.ch_attn = ChannelAttention(in_planes, ratio=4)
-        self.return_mask = return_mask
+        self.gated = gated_attention
+
+        self.attn_U = nn.Sequential(
+            nn.Linear(feature_size, hidden_size),
+            nn.Tanh()
+        )
+        if self.gated:
+            self.attn_V = nn.Sequential(
+                nn.Linear(feature_size, hidden_size),
+                nn.Sigmoid()
+            )
+        self.attn_W = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
-        bs, n, ch, w, h = x.shape
-        mask = self.ch_attn(self.ch_pool(x)[1].view(bs, n, w, h))
-        if self.return_mask:
-            return mask.view(bs, n, 1, 1, 1)
+        # x: bs x k x f
+        # k: num of instance
+        # f: feature dimension
+        bs, k, f = x.shape
+        x = x.view(bs*k, f)
+        if self.gated:
+            x = self.attn_W(self.attn_U(x) * self.attn_V(x))
         else:
-            x = x * mask.view(bs, n, 1, 1, 1)
-            return x
+            x = self.attn_W(self.attn_U(x))
+        x = x.view(bs, k, self.attn_W.out_features)
+        x = F.softmax(x.transpose(1, 2), dim=2)  # Softmax over k
+        return x  # : bs x 1 x k

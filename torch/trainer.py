@@ -8,6 +8,7 @@ import subprocess
 import inspect
 import sys
 import os
+import uuid
 
 import numpy as np
 import pandas as pd
@@ -24,7 +25,9 @@ from torch.nn import SyncBatchNorm
 from .utils import get_device, set_random_seeds, get_time
 from .tb_logger import DummyTensorBoardLogger
 from .temperature_scaling import TemperatureScaler
-from .callbacks import TorchLogger, EarlyStopping, DummyLogger
+from .callbacks import (
+    TorchLogger, EarlyStopping, DummyLogger, BestEpoch
+)
 from .hooks import SimpleHook
 from . import distributed as comm
 
@@ -60,8 +63,8 @@ class TorchTrainer:
         self.world_size = len(self.device_ids)
         self.model = model
         self.rank = 0
+        self._register_ready = False
         self._model_ready = False
-        self._hook_ready = False
 
         ### Some implicit attributes
         # DDP
@@ -75,12 +78,13 @@ class TorchTrainer:
     def _register_callbacks(self, callbacks):
         self.before_epoch = [func.before_epoch for func in callbacks]
         self.after_epoch = [func.after_epoch for func in callbacks]
+        self._save_snapshot = [func.save_snapshot for func in callbacks]
+        self._load_snapshot = [func.load_snapshot for func in callbacks]
 
     def _register_hook(self, hook):
         self.forward_train = hook.forward_train
         self.forward_test = hook.forward_test
         self.evaluate_epoch = hook.evaluate_epoch
-        self._hook_ready = True
 
     def _configure_model(self):
         ''' Mixed precision '''
@@ -350,8 +354,8 @@ class TorchTrainer:
         return loss_total, metric_total, monitor_metrics_total
 
     def _train(self, loader, loader_valid, num_epochs):
+        assert self._register_ready
         assert self._model_ready
-        assert self._hook_ready
         for epoch in range(num_epochs):
             if self.parallel == 'ddp' and not self.xla:
                 loader.sampler.set_epoch(epoch)
@@ -410,10 +414,6 @@ class TorchTrainer:
                 break
 
             self.global_epoch += 1
-        else:
-            ''' No early stop till the end '''
-            if not self.snapshot_path.exists() and self.rank == 0:
-                self.save_snapshot()
 
         if self.parallel == 'ddp':
             dist.destroy_process_group()
@@ -449,10 +449,10 @@ class TorchTrainer:
             loader_valid.per_device_loader(self.device),
             num_epochs)
 
-    def predict(self, loader, hook=SimpleHook(), parallel=None, progress_bar=False):
+    def predict(self, loader, parallel=None, progress_bar=False):
         self.parallel = parallel
-        if not self._hook_ready:
-            self._register_hook(hook)
+        if not self._register_ready: # is hook and callbacks registered?
+            raise AttributeError('Register hook and callbacks by .register() method.')
         if not self._model_ready: # is model configured?
             self.fp16 = False
             self.logger = DummyLogger('')
@@ -477,62 +477,24 @@ class TorchTrainer:
         return prediction
 
     def save_snapshot(self, path=None):
-        if path is None:
-            path = self.snapshot_path
-        if isinstance(
-                self.model,
-                (torch.nn.DataParallel, DistributedDataParallel)):
-            module = self.model.module
-        else:
-            module = self.model
+        for func in self._save_snapshot:
+            func(self, path)
 
-        if self.xla:
-            xser.save({
-                'global_epoch': self.global_epoch,
-                'model': module.state_dict(),
-                'optimizer': self.optimizer.state_dict(),
-                'scheduler': self.scheduler.state_dict(),
-                'state': self.state,
-                'all_states': self._states
-            }, str(path))
-        else:
-            torch.save({
-                'global_epoch': self.global_epoch,
-                'model': module.state_dict(),
-                'optimizer': self.optimizer.state_dict(),
-                'scheduler': self.scheduler.state_dict(),
-                'state': self.state,
-                'all_states': self._states
-            }, path)
+    def load_snapshot(self, path=None, device=None):
+        for func in self._load_snapshot:
+            func(self, path, device)
 
-    def load_snapshot(self, path, device=None,
-                      load_epoch=True, load_scheduler=True):
-        if device is None:
-            device = self.device
-        if self.xla:
-            checkpoint = xser.load(str(path))
-        else:
-            checkpoint = torch.load(path, map_location=device)
-        if isinstance(
-                self.model,
-                (torch.nn.DataParallel, DistributedDataParallel)):
-            self.model.module.load_state_dict(checkpoint['model'])
-        else:
-            self.model.load_state_dict(checkpoint['model'])
-        if hasattr(self, 'optimizer'):
-            self.optimizer.load_state_dict(checkpoint['optimizer'])
-        if hasattr(self, 'scheduler') and load_scheduler:
-            self.scheduler.load_state_dict(checkpoint['scheduler'])
-        if hasattr(self, 'global_epoch') and load_epoch:
-            self.global_epoch = checkpoint['global_epoch']
-        self.state = checkpoint['state']
-        self._states = checkpoint['all_states']
+    def register(self, hook=SimpleHook(), callbacks=[BestEpoch()]):
+        # This function must be called
+        self._register_hook(hook)
+        self._register_callbacks(callbacks)
+        self._register_ready = True
 
     def train(self,
               # Essential
               criterion, optimizer, scheduler, loader, num_epochs,
               batch_scheduler=False, scheduler_target=None, 
-              hook=SimpleHook(), callbacks=[],
+              hook=SimpleHook(), callbacks=[BestEpoch()],
               # Evaluation
               loader_valid=None, eval_metric=None, monitor_metrics=[],
               # Snapshot
@@ -556,8 +518,8 @@ class TorchTrainer:
         self.fp16 = fp16
         self.parallel = parallel
         self.progress_bar = progress_bar
-        self._register_callbacks(callbacks)
-        self._register_hook(hook)
+        self.register(hook=hook, callbacks=callbacks)
+
         # Important flags
         self.global_epoch = 1
         self.stop_train = False
@@ -572,7 +534,7 @@ class TorchTrainer:
             export_dir = Path(export_dir).expanduser()
         assert len(export_dir.suffix) == 0  # export_dir must be directory
         export_dir.mkdir(parents=True, exist_ok=True)
-        self.snapshot_path = export_dir / f'{self.serial}.pt'
+        self.snapshot_path = export_dir / f'{self.serial}.pt' 
 
         ''' Configure loggers '''
         if self.logger is None:
@@ -596,7 +558,7 @@ class TorchTrainer:
 
         ''' Resume training '''
         if resume:
-            self.load_snapshot(self.snapshot_path, 'cpu')
+            self.load_snapshot(self.snapshot_path, device='cpu')
             self.logger(
                 f'{self.snapshot_path} is loaded. Continuing from epoch {self.global_epoch}.')
         else:
@@ -632,8 +594,10 @@ class TorchTrainer:
 
             else:
                 dist_url = f'tcp://127.0.0.1:{comm.find_free_port()}'
+                session_id = str(uuid.uuid4())
                 self.logger(f'DDP on {dist_url}')
-
+                self.logger(f'session id is {session_id}')
+                
                 ddp_tmp = {
                     'trainer': self,
                     'dist_url': dist_url,
@@ -641,7 +605,7 @@ class TorchTrainer:
                     'loader_valid': loader_valid,
                     'num_epochs': num_epochs
                 }
-                ddp_tmp_path = Path(f'.ku_ddp_tmp_{get_time("%H%M%S")}')
+                ddp_tmp_path = Path(f'.ku_ddp_tmp_{session_id}')
                 with open(ddp_tmp_path, 'wb') as f:
                     pickle.dump(ddp_tmp, f)
                 ddp_worker_path = Path(inspect.getfile(
@@ -657,15 +621,16 @@ class TorchTrainer:
                 ]
                 proc = subprocess.Popen(command, env=env_copy)
                 proc.wait()
-                ddp_tmp_path.unlink()
+                if ddp_tmp_path.exists():
+                    ddp_tmp_path.unlink()
         else:
             self._configure_model()
             self._train(loader, loader_valid, num_epochs)
 
         try:
-            self.load_snapshot(self.snapshot_path)
+            self.load_snapshot()
         except:
-            self.load_snapshot(self.load_snapshot, 'cpu')
+            self.load_snapshot(device='cpu')
 
     fit = train  # for compatibility
     load_checkpoint = load_snapshot

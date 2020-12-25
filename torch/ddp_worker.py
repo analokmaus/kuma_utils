@@ -24,4 +24,9 @@ if __name__ == "__main__":
     parser.add_argument('--local_rank', type=int, required=True)
     parser.add_argument('--path', type=str, required=True)
     opt = parser.parse_args()
-    ddp_worker(opt.path, opt.local_rank)
+    try:
+        ddp_worker(opt.path, opt.local_rank)
+    except Exception as e:
+        print(e)
+        if Path(opt.path).exists():
+            Path(opt.path).unlink()

@@ -15,7 +15,10 @@ class CallbackTemplate:
     def after_epoch(self, env):
         pass
 
-    def in_batch(self, env):
+    def save_snapshot(self, trainer, path):
+        pass
+
+    def load_snapshot(self, trainer, path, device):
         pass
 
     def state_dict(self):
