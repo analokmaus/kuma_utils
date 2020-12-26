@@ -35,7 +35,8 @@ import torch.nn.functional as F
 import torch.utils.data as D
 import torch.optim as optim
 
-from kuma_utils.torch import TorchTrainer, TorchLogger, EarlyStopping
+from kuma_utils.torch import TorchTrainer, TorchLogger
+from kuma_utils.torch.callbacks import EarlyStopping, SaveSnapshot
 from kuma_utils.torch.hooks import SimpleHook
 from kuma_utils.torch.model_zoo import se_resnext50_32x4d
 from kuma_utils.metrics import Accuracy
@@ -137,7 +138,8 @@ if __name__ == "__main__":
                 EarlyStopping(
                     patience=cfg.early_stopping_rounds, 
                     target='valid_metric', 
-                    maximize=True)
+                    maximize=True),
+                SaveSnapshot() # Default snapshot path: {export_dir}/{serial}.pt
             ],
             logger=logger, 
             export_dir='results/demo',

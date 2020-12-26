@@ -20,7 +20,7 @@ class TorchLogger:
         self.stdout = stdout
         self.file = file
         self.sep = ' | '
-        log_str = f'TorchLogger created at {get_time("%y/%m/%d:%H:%M:%S")}'
+        log_str = f'TorchLogger created at {get_time("%y/%m/%d %H:%M:%S")}'
         if self.stdout:
             print(log_str)
         if self.file:

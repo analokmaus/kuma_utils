@@ -2,6 +2,18 @@ from .base import CallbackTemplate
 from pprint import pformat
 
 
+class SaveEveryEpoch(CallbackTemplate):
+    '''
+    Save snapshot every epoch
+    '''
+
+    def __init__(self, patience=5, target='valid_metric', maximize=False, skip_epoch=0):
+        super().__init__()
+        
+    def after_epoch(self, env):
+        env.checkpoint = True
+    
+
 class EarlyStopping(CallbackTemplate):
     '''
     Early stops the training if validation loss doesn't improve after a given patience.
@@ -26,7 +38,7 @@ class EarlyStopping(CallbackTemplate):
     def after_epoch(self, env):
         score = env.state[self.state['target']]
         epoch = env.state['epoch'] # local epoch
-        if epoch < self.state['skip_epoch']:
+        if epoch < self.state['skip_epoch'] or epoch == 0:
             self.state['best_score'] = score
             self.state['best_epoch'] = env.global_epoch
             env.checkpoint = True

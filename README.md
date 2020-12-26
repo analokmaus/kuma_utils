@@ -99,6 +99,8 @@ Follow [official instructions](https://github.com/pytorch/xla).
     ┃ 
     ┣ TorchTrainer              - PyTorch Wrapper.
     ┣ EarlyStopping             - Early stopping callback for TorchTrainer.
+    ┣ SaveEveryEpoch            - Save snapshot at the end of every epoch.
+    ┣ SaveSnapshot              - Checkpoint callback.
     ┣ TorchLogger               - Logger
     ┣ TensorBoardLogger         - TensorBoard Logger
     ┣ SimpleHook                - Simple train hook for almost all the tasks (see tutorial).

@@ -9,6 +9,7 @@ import inspect
 import sys
 import os
 import uuid
+from pprint import pformat
 
 import numpy as np
 import pandas as pd
@@ -26,7 +27,7 @@ from .utils import get_device, set_random_seeds, get_time
 from .tb_logger import DummyTensorBoardLogger
 from .temperature_scaling import TemperatureScaler
 from .callbacks import (
-    TorchLogger, EarlyStopping, DummyLogger, BestEpoch
+    TorchLogger, DummyLogger, SaveSnapshot
 )
 from .hooks import SimpleHook
 from . import distributed as comm
@@ -484,7 +485,7 @@ class TorchTrainer:
         for func in self._load_snapshot:
             func(self, path, device)
 
-    def register(self, hook=SimpleHook(), callbacks=[BestEpoch()]):
+    def register(self, hook=SimpleHook(), callbacks=[SaveSnapshot()]):
         # This function must be called
         self._register_hook(hook)
         self._register_callbacks(callbacks)
@@ -494,7 +495,7 @@ class TorchTrainer:
               # Essential
               criterion, optimizer, scheduler, loader, num_epochs,
               batch_scheduler=False, scheduler_target=None, 
-              hook=SimpleHook(), callbacks=[BestEpoch()],
+              hook=SimpleHook(), callbacks=[SaveSnapshot()],
               # Evaluation
               loader_valid=None, eval_metric=None, monitor_metrics=[],
               # Snapshot
@@ -534,11 +535,12 @@ class TorchTrainer:
             export_dir = Path(export_dir).expanduser()
         assert len(export_dir.suffix) == 0  # export_dir must be directory
         export_dir.mkdir(parents=True, exist_ok=True)
-        self.snapshot_path = export_dir / f'{self.serial}.pt' 
+        self.base_dir = export_dir
+        self.snapshot_path = self.base_dir / f'{self.serial}.pt' 
 
         ''' Configure loggers '''
         if self.logger is None:
-            self.logger = TorchLogger(export_dir / f'{self.serial}.log')
+            self.logger = TorchLogger(self.base_dir / f'{self.serial}.log')
         elif isinstance(self.logger, (str, Path)):
             self.logger = TorchLogger(self.logger, file=True)
         elif isinstance(self.logger, TorchLogger):
@@ -559,11 +561,7 @@ class TorchTrainer:
         ''' Resume training '''
         if resume:
             self.load_snapshot(self.snapshot_path, device='cpu')
-            self.logger(
-                f'{self.snapshot_path} is loaded. Continuing from epoch {self.global_epoch}.')
-        else:
-            if self.snapshot_path.exists():
-                self.snapshot_path.unlink()
+            self.logger(f'Continuing from epoch {self.global_epoch}.')
 
         ''' Train '''
         self.max_epochs = self.global_epoch + num_epochs - 1
@@ -644,15 +642,9 @@ class TorchTrainer:
         return pd.DataFrame(self._states)
 
     def __repr__(self):
-        print_items = [
-            'device', 'device_ids',
-            'optimizer', 'scheduler', 'criterion', 'eval_metric', 'monitor_metrics',
-            'before_train', 'after_train', 'logger'
-        ]
-        print_text = f'TorchTrainer({self.serial})\n'
-        for item in print_items:
-            try:
-                print_text += f'{item}: {getattr(self, item)}\n'
-            except:
-                pass
-        return print_text
+        print_dict = {
+            'model': self.model.__class__.__name__,
+            'device': self.device,
+            'serial': self.serial
+        }
+        return f'TorchTrainer(\n{pformat(print_dict, compact=True, indent=2)})'
