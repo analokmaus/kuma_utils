@@ -18,7 +18,6 @@ class ManualScheduler(_LRScheduler):
         super().__init__(optimizer, **kwargs)
 
     def get_lr(self):
-        old_lr = [group['lr'] for group in self.optimizer.param_groups]
         if not self.last_epoch in self.config.keys():
             return [group['lr'] for group in self.optimizer.param_groups]
         else:

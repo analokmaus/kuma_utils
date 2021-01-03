@@ -360,7 +360,6 @@ class TorchTrainer:
         for epoch in range(num_epochs):
             if self.parallel == 'ddp' and not self.xla:
                 loader.sampler.set_epoch(epoch)
-                loader_valid.sampler.set_epoch(epoch)
 
             ''' before epoch callbacks '''
             for func in self.before_epoch:
@@ -375,6 +374,8 @@ class TorchTrainer:
                 loss_valid, metric_valid, monitor_metrics_valid = \
                     None, None, None
             else:
+                if self.parallel == 'ddp' and not self.xla:
+                    loader_valid.sampler.set_epoch(epoch)
                 loss_valid, metric_valid, monitor_metrics_valid = \
                     self._valid_one_epoch(loader_valid)
 

@@ -86,4 +86,4 @@ def get_gpu_memory():
 
 
 def get_time(time_format='%H:%M:%S'):
-    return time.strftime(time_format, time.gmtime())
+    return time.strftime(time_format, time.localtime())
