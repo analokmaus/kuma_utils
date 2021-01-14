@@ -1,6 +1,8 @@
-import torch
+import os
 import random
 import subprocess
+import numpy as np
+import torch
 import time
 try:
     import torch_xla
@@ -55,10 +57,17 @@ def get_device(arg):
     return device, device_ids
 
 
-def set_random_seeds(random_seed=0, deterministic=False):
-    torch.manual_seed(random_seed)
-    torch.backends.cudnn.deterministic = deterministic
-    random.seed(random_seed)
+def seed_everything(random_state=0, deterministic=False):
+    random.seed(random_state)
+    os.environ['PYTHONHASHSEED'] = str(random_state)
+    np.random.seed(random_state)
+    torch.manual_seed(random_state)
+    torch.cuda.manual_seed(random_state)
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    else:
+        torch.backends.cudnn.deterministic = False
 
 
 def get_gpu_memory():

@@ -23,7 +23,7 @@ from torch.nn.parallel import DataParallel, DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn import SyncBatchNorm
 
-from .utils import get_device, set_random_seeds, get_time
+from .utils import get_device, seed_everything, get_time
 from .tb_logger import DummyTensorBoardLogger
 from .temperature_scaling import TemperatureScaler
 from .callbacks import (
@@ -421,7 +421,7 @@ class TorchTrainer:
             dist.destroy_process_group()
 
     def _train_ddp(self, rank, dist_url, loader, loader_valid, num_epochs):
-        set_random_seeds(0)
+        seed_everything(self.random_state, self.deterministic)
         self.rank = rank
         dist.init_process_group(
             backend='nccl', init_method=dist_url,
@@ -440,7 +440,7 @@ class TorchTrainer:
         self._train(loader, loader_valid, num_epochs)
 
     def _train_xla(self, rank, loader, loader_valid, num_epochs):
-        set_random_seeds(0)
+        seed_everything(self.random_state, self.deterministic)
         self.device = xm.xla_device()
         self.rank = xm.get_ordinal()
         self._configure_model()
@@ -502,7 +502,8 @@ class TorchTrainer:
               # Snapshot
               export_dir=None, resume=False,
               # Training option
-              fp16=False, parallel=None, grad_accumulations=1,
+              fp16=False, parallel=None, grad_accumulations=1, 
+              deterministic=None, random_state=0,
               # Logging
               logger=None, tb_logger=None, progress_bar=False, 
               ):
@@ -513,6 +514,8 @@ class TorchTrainer:
         self.batch_scheduler = batch_scheduler
         self.scheduler_target = scheduler_target
         self.grad_accumulations = grad_accumulations
+        self.deterministic = deterministic
+        self.random_state = random_state
         self.eval_metric = eval_metric
         self.monitor_metrics = monitor_metrics
         self.logger = logger

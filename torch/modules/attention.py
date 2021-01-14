@@ -38,17 +38,22 @@ class SpatialAttention(nn.Module):
 
 class CBAM2d(nn.Module):
 
-    def __init__(self, in_planes, kernel_size=7):
+    def __init__(self, in_planes, kernel_size=7, return_mask=False):
         super().__init__()
 
         self.ch_attn = ChannelAttention(in_planes)
         self.sp_attn = SpatialAttention(kernel_size)
+        self.return_mask = return_mask
 
     def forward(self, x):
         # x: bs x ch x w x h
         x = self.ch_attn(x) * x
-        x = self.sp_attn(x) * x
-        return x
+        sp_mask = self.sp_attn(x)
+        x = sp_mask * x
+        if self.return_mask:
+            return sp_mask, x
+        else:
+            return x
 
 
 class MultiInstanceAttention(nn.Module):

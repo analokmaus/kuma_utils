@@ -1,5 +1,6 @@
 import pickle
 import argparse
+import traceback
 from pathlib import Path
 import sys
 sys.path.append('.')
@@ -27,6 +28,6 @@ if __name__ == "__main__":
     try:
         ddp_worker(opt.path, opt.local_rank)
     except Exception as e:
-        print(e)
+        print(traceback.format_exc())
         if Path(opt.path).exists():
             Path(opt.path).unlink()
