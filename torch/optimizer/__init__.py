@@ -1,1 +1,1 @@
-from sam import *
+from .sam import *
