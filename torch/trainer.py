@@ -29,7 +29,7 @@ from .temperature_scaling import TemperatureScaler
 from .callbacks import (
     TorchLogger, DummyLogger, SaveSnapshot
 )
-from .hooks import SimpleHook
+from .hooks import TrainHook
 from . import distributed as comm
 
 try:
@@ -71,7 +71,7 @@ class TorchTrainer:
         # DDP
         self.ddp_sync_batch_norm = True
         self.ddp_average_loss = True
-        self.ddp_sync_last = False
+        self.ddp_sync_last = False # deprecated
         self.ddp_workers = -1
         # MISC
         self.debug = False
@@ -85,6 +85,7 @@ class TorchTrainer:
     def _register_hook(self, hook):
         self.forward_train = hook.forward_train
         self.forward_test = hook.forward_test
+        self.evaluate_batch = hook.evaluate_batch
         self.evaluate_epoch = hook.evaluate_epoch
 
     def _configure_model(self):
@@ -185,38 +186,56 @@ class TorchTrainer:
             self.optimizer.zero_grad()
             batches_done = len(loader) * (self.global_epoch-1) + batch_i
             inputs = [t.to(self.device) for t in inputs]
-
+            
+            # forward and backward
             if self.fp16:
                 with amp.autocast():
-                    loss = self.forward_train(self, inputs)
+                    loss, approx = self.forward_train(self, inputs)
                 loss = loss / self.grad_accumulations
-                if self.parallel == 'ddp' and self.ddp_sync_last \
-                    and batch_i != len(loader) - 1:
-                    with self.model.no_sync():
-                        scaler.scale(loss).backward()
-                else: # sync only last batch
-                    scaler.scale(loss).backward()
+                scaler.scale(loss).backward()
                 if (batch_i + 1) % self.grad_accumulations == 0:
-                    scaler.step(self.optimizer)
-                    scaler.update()
+                    if self.sam:
+                        # first step
+                        optimizer_state = scaler._per_optimizer_states[id(self.optimizer)]
+                        scaler.unscale_(self.optimizer)
+                        if not sum(v.item() for v in optimizer_state["found_inf_per_device"].values()):
+                            self.optimizer.first_step(zero_grad=True)
+                        optimizer_state["stage"] = 2
+                        scaler.update()
+                        # second step
+                        loss2, _ = self.forward_train(self, inputs)
+                        scaler.scale(loss2).backward()
+                        scaler.unscale_(self.optimizer)
+                        if not sum(v.item() for v in optimizer_state["found_inf_per_device"].values()):
+                            self.optimizer.second_step(zero_grad=True)
+                        optimizer_state["stage"] = 2
+                        scaler.update()
+                    else:
+                        scaler.step(self.optimizer)
+                        scaler.update()
             else:
-                loss = self.forward_train(self, inputs)
+                loss, approx = self.forward_train(self, inputs)
                 loss = loss / self.grad_accumulations
-                if self.parallel == 'ddp' and self.ddp_sync_last \
-                    and batch_i != len(loader) - 1:
-                    with self.model.no_sync():
-                        loss.backward()
-                else:  # sync only last batch
-                    loss.backward()
-
+                loss.backward()
                 if (batch_i + 1) % self.grad_accumulations == 0:
                     if self.xla:
-                        xm.optimizer_step(self.optimizer, barrier=True)
+                        if self.sam:
+                            raise RuntimeError('SAM optimizer on XLA device is not available.')
+                        else:
+                            xm.optimizer_step(self.optimizer, barrier=True)
                     else:
-                        self.optimizer.step()
+                        if self.sam:
+                            self.optimizer.first_step(zero_grad=True)
+                            loss2, _ = self.forward_train(self, inputs)
+                            loss2.backward()
+                            self.optimizer.second_step(zero_grad=True)
+                        else:
+                            self.optimizer.step()
                     if self.batch_scheduler:
                         self.scheduler.step()
-
+            
+            # evaluation
+            self.evaluate_batch(self, inputs, approx)
             if self.parallel == 'ddp' and self.ddp_average_loss:
                 if self.xla:
                     loss_batch = xm.all_gather(
@@ -227,7 +246,7 @@ class TorchTrainer:
             else:  # Use loss on device: 0
                 loss_batch = loss.item()
 
-            ''' TensorBoard logging '''
+            # logging
             learning_rate = [param_group['lr']
                              for param_group in self.optimizer.param_groups]
             logs = [
@@ -238,7 +257,6 @@ class TorchTrainer:
                 metric = self.epoch_storage['batch_metric'][-1]
                 logs.append(('batch_valid_mertric', metric))
             self.tb_logger.list_of_scalars_summary(logs, batches_done)
-
             self.epoch_storage['loss'].append(loss_batch)
 
             train_time += time.time() - curr_time
@@ -258,7 +276,7 @@ class TorchTrainer:
         loss_total = self.epoch_storage['loss'].mean().item()
 
         if self.parallel == 'ddp':
-            ''' Gather tensors '''
+            # gather tensors
             for key, val in self.epoch_storage.items():
                 if len(val) > 0:
                     if self.xla:
@@ -274,7 +292,7 @@ class TorchTrainer:
         if metric_total is None:
             metric_total = loss_total
 
-        ''' TensorBoard logging '''
+        # logging
         logs = [
             ('epoch_train_loss', loss_total),
             ('epoch_train_metric', metric_total),
@@ -297,8 +315,8 @@ class TorchTrainer:
             for batch_i, inputs in iterator:
                 batches_done = len(loader) * (self.global_epoch-1) + batch_i
                 inputs = [t.to(self.device) for t in inputs]
-                loss = self.forward_train(self, inputs)
-
+                loss, approx = self.forward_train(self, inputs)
+                self.evaluate_batch(self, inputs, approx)
                 if self.parallel == 'ddp' and self.ddp_average_loss:
                     if self.xla:
                         loss_batch = xm.all_gather(
@@ -309,7 +327,6 @@ class TorchTrainer:
                 else:  # Use loss on device: 0
                     loss_batch = loss.item()
 
-                ''' TensorBoard logging '''
                 logs = [
                     ('batch_valid_loss', loss_batch),
                 ]
@@ -317,7 +334,6 @@ class TorchTrainer:
                     metric = self.epoch_storage['batch_metric'][-1]
                     logs.append(('batch_valid_mertric', metric))
                 self.tb_logger.list_of_scalars_summary(logs, batches_done)
-
                 self.epoch_storage['loss'].append(loss_batch)
 
         for key, val in self.epoch_storage.items():
@@ -330,7 +346,6 @@ class TorchTrainer:
         loss_total = self.epoch_storage['loss'].mean().item()
 
         if self.parallel == 'ddp':
-            ''' Gather tensors '''
             for key, val in self.epoch_storage.items():
                 if len(val) > 0:
                     if self.xla:
@@ -346,7 +361,6 @@ class TorchTrainer:
         if metric_total is None:
             metric_total = loss_total
 
-        ''' TensorBoard logging '''
         logs = [
             ('epoch_valid_loss', loss_total),
             ('epoch_valid_metric', metric_total),
@@ -486,7 +500,7 @@ class TorchTrainer:
         for func in self._load_snapshot:
             func(self, path, device)
 
-    def register(self, hook=SimpleHook(), callbacks=[SaveSnapshot()]):
+    def register(self, hook=TrainHook(), callbacks=[SaveSnapshot()]):
         # This function must be called
         self._register_hook(hook)
         self._register_callbacks(callbacks)
@@ -495,8 +509,8 @@ class TorchTrainer:
     def train(self,
               # Essential
               criterion, optimizer, scheduler, loader, num_epochs,
-              batch_scheduler=False, scheduler_target=None, 
-              hook=SimpleHook(), callbacks=[SaveSnapshot()],
+              batch_scheduler=False, scheduler_target=None,
+              hook=TrainHook(), callbacks=[SaveSnapshot()],
               # Evaluation
               loader_valid=None, eval_metric=None, monitor_metrics=[],
               # Snapshot
@@ -531,6 +545,10 @@ class TorchTrainer:
         self.checkpoint = False
         self.outoffold = None
         self.prediction = None
+        if self.optimizer.__class__.__name__ == 'SAM':
+            self.sam = True
+        else:
+            self.sam = False
 
         ''' Configure directory '''
         if export_dir is None:
@@ -637,10 +655,6 @@ class TorchTrainer:
     fit = train  # for compatibility
     load_checkpoint = load_snapshot
     save_checkpoint = save_snapshot
-
-    def calibrate_model(self, loader):
-        self.model = TemperatureScaler(self.model).to(self.device)
-        self.model.set_temperature(loader)
 
     def export_dataframe(self):
         return pd.DataFrame(self._states)

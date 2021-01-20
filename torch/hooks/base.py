@@ -10,11 +10,15 @@ class HookTemplate:
         pass
 
     def forward_train(self, trainer, inputs):
-        # return loss
+        # return loss, approx
         pass
 
-    def forward_test(self, trainer, inputs):
+    def forward_test(self, trainer, inputs, approx):
         # return approx
+        pass
+
+    def evaluate_batch(self, trainer, inputs):
+        # return None
         pass
 
     def evaluate_epoch(self, trainer):

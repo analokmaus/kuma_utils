@@ -133,7 +133,7 @@ if __name__ == "__main__":
             scheduler=scheduler,
             scheduler_target='valid_loss', # ReduceLROnPlateau reads metric each epoch
             num_epochs=cfg.num_epochs,
-            hook=SimpleHook(evaluate_batch=False),
+            hook=SimpleHook(evaluate_in_batch=False),
             callbacks=[
                 EarlyStopping(
                     patience=cfg.early_stopping_rounds, 
@@ -145,6 +145,8 @@ if __name__ == "__main__":
             export_dir='results/demo',
             parallel='ddp',
             fp16=True,
+            deterministic=True, 
+            random_state=0, 
             progress_bar=True # Progress bar shows batches done
         )
 
@@ -250,15 +252,19 @@ class SampleHook:
         target = inputs[-1]
         approx = trainer.model(inputs[0])
         loss = trainer.criterion(approx, target)
-        storage['approx'].append(approx)
-        storage['target'].append(target)
-        return loss
+        return loss, approx
 
     def forward_test(self, trainer, inputs):
         approx = trainer.model(inputs[0])
         return approx
 
+    def evaluate_batch(self, trainer, inputs, approx):
+        storage = trainer.epoch_storage
+        storage['approx'].append(approx)
+        storage['target'].append(target)
+
     def evaluate_epoch(self, trainer):
+        storage = trainer.epoch_storage
         metric_total = trainer.eval_metric(
                     storage['approx'], storage['target'])
                 
@@ -268,11 +274,15 @@ class SampleHook:
                 monitor_metric(storage['approx'], storage['target']))
         return metric_total, monitor_metrics_total
 ```
+
 `.forward_train()` is called in each mini-batch in training and validation loop. 
-This method returns loss tensor.
+This method returns loss and prediction tensors.
 
 `.forward_test()` is called in each mini-batch in inference loop. 
 This method returns prediction values tensor.
+
+`.evaluate_batch()` is called in each mini-batch after back-propagation and optimizer.step(). 
+This method returns nothing.
 
 `.evaluate_epoch()` is called at the end of each training and validation loop. 
 This method returns eval_metric (scaler) and monitor metrics (list).

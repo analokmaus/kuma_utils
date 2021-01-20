@@ -1,2 +1,2 @@
 from .base import HookTemplate
-from .simple_hook import SimpleHook
+from .simple_hook import *

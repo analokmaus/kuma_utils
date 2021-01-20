@@ -4,6 +4,7 @@ import torch
 class SAM(torch.optim.Optimizer):
     '''
     https://github.com/davda54/sam/blob/main/sam.py
+    Modified
     '''
     def __init__(self, params, base_optimizer, rho=0.05, **kwargs):
         assert rho >= 0.0, f"Invalid rho, should be non-negative: {rho}"
@@ -13,6 +14,14 @@ class SAM(torch.optim.Optimizer):
 
         self.base_optimizer = base_optimizer(self.param_groups, **kwargs)
         self.param_groups = self.base_optimizer.param_groups
+
+    def __getstate__(self):
+        return {
+            'defaults': self.defaults,
+            'state': self.state,
+            'param_groups': self.param_groups,
+            'base_optimizer': self.base_optimizer # pickle base_optimizer as well
+        }
 
     @torch.no_grad()
     def first_step(self, zero_grad=False):
