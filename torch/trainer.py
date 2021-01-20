@@ -191,6 +191,7 @@ class TorchTrainer:
             if self.fp16:
                 with amp.autocast():
                     loss, approx = self.forward_train(self, inputs)
+                    self.evaluate_batch(self, inputs, approx) # evaluation
                 loss = loss / self.grad_accumulations
                 scaler.scale(loss).backward()
                 if (batch_i + 1) % self.grad_accumulations == 0:
@@ -203,7 +204,8 @@ class TorchTrainer:
                         optimizer_state["stage"] = 2
                         scaler.update()
                         # second step
-                        loss2, _ = self.forward_train(self, inputs)
+                        with amp.autocast():
+                            loss2, _ = self.forward_train(self, inputs)
                         scaler.scale(loss2).backward()
                         scaler.unscale_(self.optimizer)
                         if not sum(v.item() for v in optimizer_state["found_inf_per_device"].values()):
@@ -215,6 +217,7 @@ class TorchTrainer:
                         scaler.update()
             else:
                 loss, approx = self.forward_train(self, inputs)
+                self.evaluate_batch(self, inputs, approx) # evaluation
                 loss = loss / self.grad_accumulations
                 loss.backward()
                 if (batch_i + 1) % self.grad_accumulations == 0:
@@ -234,8 +237,6 @@ class TorchTrainer:
                     if self.batch_scheduler:
                         self.scheduler.step()
             
-            # evaluation
-            self.evaluate_batch(self, inputs, approx)
             if self.parallel == 'ddp' and self.ddp_average_loss:
                 if self.xla:
                     loss_batch = xm.all_gather(

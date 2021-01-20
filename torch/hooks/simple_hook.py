@@ -22,10 +22,10 @@ class TrainHook(HookTemplate):
         target = inputs[-1]
         approx = trainer.model(*inputs[:-1])
         loss = trainer.criterion(approx, target)
-        return loss, approx
+        return loss, approx.detach()
 
     def forward_test(self, trainer, inputs):
-        approx = trainer.model(inputs[0])
+        approx = trainer.model(*inputs[:-1])
         return approx
 
     def evaluate_batch(self, trainer, inputs, approx):
@@ -49,7 +49,7 @@ class TrainHook(HookTemplate):
             monitor_total = storage['batch_monitor'].mean(0).tolist()
 
         else: 
-            # Calcilate scores
+            # Calculate scores
             metric_total, monitor_total = self._evaluate(
                 trainer, storage['approx'], storage['target'])
         return metric_total, monitor_total
