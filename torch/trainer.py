@@ -10,6 +10,7 @@ import sys
 import os
 import uuid
 from pprint import pformat
+import __main__
 
 import numpy as np
 import pandas as pd
@@ -616,8 +617,10 @@ class TorchTrainer:
             else:
                 dist_url = f'tcp://127.0.0.1:{comm.find_free_port()}'
                 session_id = str(uuid.uuid4())
-                self.logger(f'DDP on {dist_url}')
-                self.logger(f'session id is {session_id}')
+                origin = Path.cwd() / __main__.__file__
+                self.logger(f'DDP URL :\t{dist_url}')
+                self.logger(f'session id :\t{session_id}')
+                self.logger(f'__main__ :\t{origin}')
                 
                 ddp_tmp = {
                     'trainer': self,
@@ -639,8 +642,10 @@ class TorchTrainer:
                     '--nproc_per_node', str(self.world_size), 
                     ddp_worker_path,
                     '--path', ddp_tmp_path,
+                    '--origin', str(origin)
                 ]
-                proc = subprocess.Popen(command, env=env_copy)
+                proc = subprocess.Popen(
+                    command, env=env_copy, cwd=origin.parent)
                 proc.wait()
                 if ddp_tmp_path.exists():
                     ddp_tmp_path.unlink()
