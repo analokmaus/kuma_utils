@@ -3,7 +3,9 @@ import torch
 from torch.nn.parallel import DataParallel, DistributedDataParallel
 
 
-def _save_snapshot(trainer, path):
+def _save_snapshot(trainer, path, 
+                   save_optimizer=False, 
+                   save_scheduler=False):
     if isinstance(
             trainer.model,
             (DataParallel, DistributedDataParallel)):
@@ -14,11 +16,13 @@ def _save_snapshot(trainer, path):
     serialized = {
         'global_epoch': trainer.global_epoch,
         'model': module.state_dict(),
-        'optimizer': trainer.optimizer.state_dict(),
-        'scheduler': trainer.scheduler.state_dict(),
         'state': trainer.state,
         'all_states': trainer._states
     }
+    if save_optimizer:
+        serialized['optimizer'] = trainer.optimizer.state_dict()
+    if save_scheduler:
+        serialized['scheduler'] = trainer.scheduler.state_dict()
 
     if trainer.xla:
         import torch_xla.utils.serialization as xser
@@ -41,9 +45,9 @@ def _load_snapshot(trainer, path, device):
     else:
         trainer.model.load_state_dict(checkpoint['model'])
 
-    if hasattr(trainer, 'optimizer'):
+    if hasattr(trainer, 'optimizer') and 'optimizer' in checkpoint.keys():
         trainer.optimizer.load_state_dict(checkpoint['optimizer'])
-    if hasattr(trainer, 'scheduler'):
+    if hasattr(trainer, 'scheduler') and 'scheduler' in checkpoint.keys():
         trainer.scheduler.load_state_dict(checkpoint['scheduler'])
     if hasattr(trainer, 'global_epoch'):
         trainer.global_epoch = checkpoint['global_epoch']
@@ -52,14 +56,17 @@ def _load_snapshot(trainer, path, device):
 
 
 class SaveAllSnapshots(CallbackTemplate):
-    def __init__(self, path=None):
+    def __init__(self, path=None, save_optimizer=False, save_scheduler=False):
         super().__init__()
+        self.path = path
+        self.save_optimizer = save_optimizer
+        self.save_scheduler = save_scheduler
 
     def save_snapshot(self, trainer, path):
         if path is None:
             path = trainer.base_dir / f'{trainer.serial}_epoch_{trainer.global_epoch}.pt'
         
-        _save_snapshot(trainer, path)
+        _save_snapshot(trainer, path, self.save_optimizer, self.save_scheduler)
 
     def load_snapshot(self, trainer, path=None, device=None):
         if path is None:
@@ -74,7 +81,6 @@ class SaveAllSnapshots(CallbackTemplate):
             device = trainer.device
         
         _load_snapshot(trainer, path, device)
-        print(trainer.state)
         
 
 class SaveSnapshot(CallbackTemplate):
@@ -82,14 +88,16 @@ class SaveSnapshot(CallbackTemplate):
     Path priority: path argument > BestEpoch.path > trainer.snapshot_path
     '''
 
-    def __init__(self, path=None):
+    def __init__(self, path=None, save_optimizer=False, save_scheduler=False):
         super().__init__()
         self.path = path
+        self.save_optimizer = save_optimizer
+        self.save_scheduler = save_scheduler
 
     def save_snapshot(self, trainer, path):
         if path is None:
             path = self.path if self.path is not None else trainer.snapshot_path
-        _save_snapshot(trainer, path)
+        _save_snapshot(trainer, path, self.save_optimizer, self.save_scheduler)
 
     def load_snapshot(self, trainer, path=None, device=None):
         if path is None:
