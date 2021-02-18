@@ -85,6 +85,7 @@ class TorchTrainer:
 
     def _register_hook(self, hook):
         self.forward_train = hook.forward_train
+        self.forward_valid = hook.forward_valid
         self.forward_test = hook.forward_test
         self.evaluate_batch = hook.evaluate_batch
         self.evaluate_epoch = hook.evaluate_epoch
@@ -317,7 +318,7 @@ class TorchTrainer:
             for batch_i, inputs in iterator:
                 batches_done = len(loader) * (self.global_epoch-1) + batch_i
                 inputs = [t.to(self.device) for t in inputs]
-                loss, approx = self.forward_train(self, inputs)
+                loss, approx = self.forward_valid(self, inputs)
                 self.evaluate_batch(self, inputs, approx)
                 if self.parallel == 'ddp' and self.ddp_average_loss:
                     if self.xla:

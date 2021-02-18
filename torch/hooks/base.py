@@ -13,6 +13,8 @@ class HookTemplate:
         # return loss, approx
         pass
 
+    forward_valid = forward_train
+
     def forward_test(self, trainer, inputs, approx):
         # return approx
         pass
