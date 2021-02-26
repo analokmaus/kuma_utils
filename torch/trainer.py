@@ -654,11 +654,6 @@ class TorchTrainer:
             self._configure_model()
             self._train(loader, loader_valid, num_epochs)
 
-        try:
-            self.load_snapshot()
-        except:
-            self.load_snapshot(device='cpu')
-
     fit = train  # for compatibility
     load_checkpoint = load_snapshot
     save_checkpoint = save_snapshot
