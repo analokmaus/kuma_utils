@@ -196,6 +196,7 @@ class TorchTrainer:
                     self.evaluate_batch(self, inputs, approx) # evaluation
                 loss = loss / self.grad_accumulations
                 scaler.scale(loss).backward()
+                grad_norm = nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 if (batch_i + 1) % self.grad_accumulations == 0:
                     if self.sam:
                         # first step
@@ -222,6 +223,7 @@ class TorchTrainer:
                 self.evaluate_batch(self, inputs, approx) # evaluation
                 loss = loss / self.grad_accumulations
                 loss.backward()
+                grad_norm = nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 if (batch_i + 1) % self.grad_accumulations == 0:
                     if self.xla:
                         if self.sam:
@@ -520,7 +522,7 @@ class TorchTrainer:
               export_dir=None, resume=False,
               # Training option
               fp16=False, parallel=None, grad_accumulations=1, 
-              deterministic=None, random_state=0,
+              deterministic=None, random_state=0, max_grad_norm=10000, 
               # Logging
               logger=None, tb_logger=None, progress_bar=False, 
               ):
@@ -532,6 +534,7 @@ class TorchTrainer:
         self.scheduler_target = scheduler_target
         self.grad_accumulations = grad_accumulations
         self.deterministic = deterministic
+        self.max_grad_norm = max_grad_norm
         self.random_state = random_state
         self.eval_metric = eval_metric
         self.monitor_metrics = monitor_metrics
