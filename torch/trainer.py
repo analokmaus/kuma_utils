@@ -589,6 +589,7 @@ class TorchTrainer:
         ''' Resume training '''
         if resume:
             self.load_snapshot(self.snapshot_path, device='cpu')
+            self.global_epoch += 1
             self.logger(f'Continuing from epoch {self.global_epoch}.')
 
         ''' Train '''

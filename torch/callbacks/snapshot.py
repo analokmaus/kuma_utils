@@ -69,13 +69,9 @@ class SaveAllSnapshots(CallbackTemplate):
         _save_snapshot(trainer, path, self.save_optimizer, self.save_scheduler)
 
     def load_snapshot(self, trainer, path=None, device=None):
-        if path is None:
-            if trainer.state['best_epoch'] is None:
-                # Pickup best
-                path = trainer.base_dir / f'{trainer.serial}_epoch_{trainer.state["best_epoch"]}.pt'
-            else:
-                # Pickup latest
-                path = sorted(list(trainer.base_dir.glob(f'{trainer.serial}_epoch_*.pt')))[-1]
+        if path is None or not path.exists():
+            # Pickup latest
+            path = sorted(list(trainer.base_dir.glob(f'{trainer.serial}_epoch_*.pt')))[-1]
 
         if device is None:
             device = trainer.device
