@@ -379,6 +379,8 @@ class TorchTrainer:
         for epoch in range(num_epochs):
             if self.parallel == 'ddp' and not self.xla:
                 loader.sampler.set_epoch(epoch)
+            
+            self.state.update({'epoch': epoch})
 
             ''' before epoch callbacks '''
             for func in self.before_epoch:

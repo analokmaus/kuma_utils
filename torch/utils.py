@@ -22,7 +22,10 @@ def fit_state_dict(state_dict, model):
     Ignore size mismatch when loading state_dict
     '''
     for name, param in model.named_parameters():
-        new_param = state_dict[name]
+        if name in state_dict.keys():
+            new_param = state_dict[name]
+        else:
+            continue
         if new_param.size() != param.size():
             print(f'Size mismatch in {name}: {new_param.shape} -> {param.shape}')
             state_dict.pop(name)
