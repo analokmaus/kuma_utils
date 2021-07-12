@@ -24,6 +24,8 @@ class TrainHook(HookTemplate):
         loss = trainer.criterion(approx, target)
         return loss, approx.detach()
 
+    forward_valid = forward_train
+
     def forward_test(self, trainer, inputs):
         approx = trainer.model(*inputs[:-1])
         return approx
