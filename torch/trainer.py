@@ -241,6 +241,11 @@ class TorchTrainer:
                     if self.batch_scheduler:
                         self.scheduler.step()
             
+            if torch.isnan(loss).any():
+                self.logger(f'{torch.isnan(loss).sum()} NaN detected in loss. ({batch_i}/{len(loader)})')
+            if torch.isnan(approx).any():
+                self.logger(f'{torch.isnan(approx).sum()} NaN detected in output tensor. ({batch_i}/{len(loader)})')
+            
             if self.parallel == 'ddp' and self.ddp_average_loss:
                 if self.xla:
                     loss_batch = xm.all_gather(
@@ -321,6 +326,10 @@ class TorchTrainer:
                 batches_done = len(loader) * (self.global_epoch-1) + batch_i
                 inputs = [t.to(self.device) for t in inputs]
                 loss, approx = self.forward_valid(self, inputs)
+                if torch.isnan(loss).any():
+                    self.logger(f'{torch.isnan(loss).sum()} NaN detected in loss. ({batch_i}/{len(loader)})')
+                if torch.isnan(approx).any():
+                    self.logger(f'{torch.isnan(approx).sum()} NaN detected in output tensor. ({batch_i}/{len(loader)})')
                 self.evaluate_batch(self, inputs, approx)
                 if self.parallel == 'ddp' and self.ddp_average_loss:
                     if self.xla:
