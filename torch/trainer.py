@@ -167,6 +167,7 @@ class TorchTrainer:
     def _train_one_epoch(self, loader):
         loader_time = .0
         train_time = .0
+        start_time = time.time()
         curr_time = time.time()
 
         self.epoch_storage = defaultdict(list)
@@ -180,13 +181,20 @@ class TorchTrainer:
             iterator = enumerate(tqdm(loader, desc='train'))
         else:
             iterator = enumerate(loader)
+        batch_total = len(loader)
+        ett_disp = False
 
         for batch_i, inputs in iterator:
             loader_time += time.time() - curr_time
             curr_time = time.time()
+            elapsed_time = curr_time - start_time
+            if self.state['epoch'] == 0 and elapsed_time > 30 and not ett_disp: # show ETA
+                ett = elapsed_time * batch_total // batch_i
+                self.logger(f'Estimated epoch training time: {int(ett)} s')
+                ett_disp = True
 
             self.optimizer.zero_grad()
-            batches_done = len(loader) * (self.global_epoch-1) + batch_i
+            batches_done = batch_total * (self.global_epoch-1) + batch_i
             inputs = [t.to(self.device) for t in inputs]
             
             # forward and backward
