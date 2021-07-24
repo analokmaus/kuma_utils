@@ -24,9 +24,8 @@ from torch.nn.parallel import DataParallel, DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn import SyncBatchNorm
 
-from .utils import get_device, seed_everything, get_time
+from .utils import get_device, seed_everything, get_gpu_memory
 from .tb_logger import DummyTensorBoardLogger
-from .temperature_scaling import TemperatureScaler
 from .callbacks import (
     TorchLogger, DummyLogger, SaveSnapshot
 )
@@ -191,6 +190,7 @@ class TorchTrainer:
             if self.state['epoch'] == 0 and elapsed_time > 30 and not ett_disp: # show ETA
                 ett = elapsed_time * batch_total // batch_i
                 self.logger(f'Estimated epoch training time: {int(ett)} s')
+                self.logger(f'Maximum GRAM usage: {int(max(get_gpu_memory().values()))} MB')
                 ett_disp = True
 
             self.optimizer.zero_grad()
