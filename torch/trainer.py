@@ -11,6 +11,7 @@ import os
 import uuid
 from pprint import pformat
 import __main__
+import resource
 
 import numpy as np
 import pandas as pd
@@ -67,7 +68,7 @@ class TorchTrainer:
         self._register_ready = False
         self._model_ready = False
 
-        ### Some implicit attributes
+        ### Implicit attributes
         # DDP
         self.ddp_sync_batch_norm = True
         self.ddp_average_loss = True
@@ -190,7 +191,16 @@ class TorchTrainer:
             if self.state['epoch'] == 0 and elapsed_time > 30 and not ett_disp: # show ETA
                 ett = elapsed_time * batch_total // batch_i
                 self.logger(f'Estimated epoch training time: {int(ett)} s')
-                self.logger(f'Maximum GRAM usage: {int(max(get_gpu_memory().values()))} MB')
+                try:
+                    ram_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
+                    self.logger(f'Maximum RAM usage: {ram_usage} MB')
+                except:
+                    self.logger('Failed to get RAM usage.')
+                try:
+                    gram_usage = int(max(get_gpu_memory().values()))
+                    self.logger(f'Maximum GRAM usage: {gram_usage} MB')
+                except:
+                    self.logger('Failed to get GRAM usage.')
                 ett_disp = True
 
             self.optimizer.zero_grad()
