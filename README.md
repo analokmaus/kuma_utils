@@ -66,7 +66,7 @@ Follow [official instructions](https://github.com/pytorch/xla).
 ┃       ┣ lightgbm               - Optune lightgbm integration with modifiable n_trials.
 ┃
 ┣ metrics                       - Universal metrics
-┃   ┣ SeWithFixedSp             - Sensitivity with fixed specificity.
+┃   ┣ SeAtFixedSp               - Sensitivity at fixed specificity.
 ┃   ┣ RMSE
 ┃   ┣ AUC
 ┃   ┣ Accuracy

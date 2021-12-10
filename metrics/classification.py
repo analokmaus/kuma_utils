@@ -43,13 +43,14 @@ class Accuracy(MetricTemplate):
         return np.mean((target == approx).astype(int))
 
 
-class SeWithFixedSp(MetricTemplate):
+class SeAtFixedSp(MetricTemplate):
     '''
-    Maximize sensitivity with fixed specificity
+    Maximize sensitivity at fixed specificity
     '''
-    def __init__(self, sp=0.9):
+    def __init__(self, sp=0.9, return_sp=False):
         super().__init__(maximize=True)
-        self.sp = 0.9
+        self.sp = sp
+        self.return_sp = return_sp
 
     def _get_threshold(self, target, approx):
         tn_idx = (target == 0)
@@ -81,7 +82,12 @@ class SeWithFixedSp(MetricTemplate):
         se = tp / (tp + fn)
         sp = tn / (tn + fp)
 
-        return se
+        if self.return_sp:
+            return se, sp
+        else:
+            return se
+
+SeWithFixedSp = SeAtFixedSp
 
 
 class QWK(MetricTemplate):
