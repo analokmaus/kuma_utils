@@ -189,7 +189,7 @@ class TorchTrainer:
             loader_time += time.time() - curr_time
             curr_time = time.time()
             elapsed_time = curr_time - start_time
-            if self.state['epoch'] == 0 and elapsed_time > 30 and not ett_disp: # show ETA
+            if self.rank == 0 and self.state['epoch'] == 0 and elapsed_time > 30 and not ett_disp: # show ETA
                 ett = elapsed_time * batch_total // batch_i
                 self.logger(f'Estimated epoch training time: {int(ett)} s')
                 try:

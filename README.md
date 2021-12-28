@@ -73,11 +73,6 @@ Follow [official instructions](https://github.com/pytorch/xla).
 ┃   ┣ QWK
 ┃
 ┣ torch
-    ┣ model_zoo                 - Some basic architectures with pretrained weights.
-    ┃   ┣ Xception
-    ┃   ┣ SENet
-    ┃   ┣ EfficientNet
-    ┃ 
     ┣ lr_scheduler
     ┃   ┣ ManualScheduler
     ┃   ┣ CyclicCosAnnealingLR
