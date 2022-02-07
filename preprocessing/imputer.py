@@ -36,7 +36,8 @@ class LGBMImputer:
         self.feature_with_missing = [
             col for col in self.feature_names if X[col].isnull().sum() > 0]
 
-        for icol, col in enumerate(tqdm(self.feature_with_missing)):
+        pbar = tqdm(self.feature_with_missing)
+        for icol, col in enumerate(pbar):
             if icol in self.cat_features:
                 nuni = X[col].dropna().nunique()
                 if nuni == 2:
@@ -92,7 +93,7 @@ class LGBMImputer:
             self.offsets[col] = y_offset
             self.objectives[col] = params['objective']
             if self.verbose:
-                tqdm.write(
+                pbar.set_description(
                     f'{col}:\t{self.objectives[col]}...iter{model.best_iteration}/{self.n_iter}')
 
     def transform(self, X):
@@ -129,7 +130,8 @@ class LGBMImputer:
         output_X = X.copy()
         self.feature_with_missing = [col for col in self.feature_names if X[col].isnull().sum() > 0]
 
-        for icol, col in enumerate(tqdm(self.feature_with_missing)):
+        pbar = tqdm(self.feature_with_missing)
+        for icol, col in enumerate(pbar):
             if icol in self.cat_features:
                 nuni = X[col].dropna().nunique()
                 if nuni == 2:
@@ -194,6 +196,6 @@ class LGBMImputer:
             self.offsets[col] = y_offset
             self.objectives[col] = params['objective']
             if self.verbose:
-                tqdm.write(f'{col}:\t{self.objectives[col]}...iter{model.best_iteration}/{self.n_iter}')
+                pbar.set_description(f'{col}:\t{self.objectives[col]}...iter{model.best_iteration}/{self.n_iter}')
         
         return output_X
