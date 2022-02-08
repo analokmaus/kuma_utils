@@ -3,7 +3,12 @@ import pandas as pd
 import lightgbm as lgb
 
 from .utils import analyze_column
+from ..utils import is_env_notebook
 
+if is_env_notebook:
+    from tqdm.notebook import tqdm
+else:
+    from tqdm import tqdm
 
 class LGBMImputer:
     '''
@@ -31,7 +36,8 @@ class LGBMImputer:
         self.feature_with_missing = [
             col for col in self.feature_names if X[col].isnull().sum() > 0]
 
-        for icol, col in enumerate(self.feature_with_missing):
+        pbar = tqdm(self.feature_with_missing)
+        for icol, col in enumerate(pbar):
             if icol in self.cat_features:
                 nuni = X[col].dropna().nunique()
                 if nuni == 2:
@@ -87,13 +93,13 @@ class LGBMImputer:
             self.offsets[col] = y_offset
             self.objectives[col] = params['objective']
             if self.verbose:
-                print(
+                pbar.set_description(
                     f'{col}:\t{self.objectives[col]}...iter{model.best_iteration}/{self.n_iter}')
 
     def transform(self, X):
         output_X = X.copy()
 
-        for icol, col in enumerate(self.feature_with_missing):
+        for icol, col in enumerate(tqdm(self.feature_with_missing)):
             model = self.imputers[col]
             y_offset = self.offsets[col]
             objective = self.objectives[col]
@@ -114,16 +120,18 @@ class LGBMImputer:
         return output_X
         
     def fit_transform(self, X, y=None):
-        output_X = X.copy()
         self.n_features = X.shape[1]
         if isinstance(X, pd.DataFrame):
             self.feature_names = X.columns.tolist()
         else:
             self.feature_names = [f'f{i}' for i in range(self.n_features)]
             X = pd.DataFrame(X, columns=self.feature_names)
+
+        output_X = X.copy()
         self.feature_with_missing = [col for col in self.feature_names if X[col].isnull().sum() > 0]
 
-        for icol, col in enumerate(self.feature_with_missing):
+        pbar = tqdm(self.feature_with_missing)
+        for icol, col in enumerate(pbar):
             if icol in self.cat_features:
                 nuni = X[col].dropna().nunique()
                 if nuni == 2:
@@ -188,6 +196,6 @@ class LGBMImputer:
             self.offsets[col] = y_offset
             self.objectives[col] = params['objective']
             if self.verbose:
-                print(f'{col}:\t{self.objectives[col]}...iter{model.best_iteration}/{self.n_iter}')
+                pbar.set_description(f'{col}:\t{self.objectives[col]}...iter{model.best_iteration}/{self.n_iter}')
         
         return output_X
