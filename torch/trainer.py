@@ -675,9 +675,18 @@ class TorchTrainer:
                     self.__class__)).parent/'ddp_worker.py'
                 env_copy = os.environ.copy()
                 env_copy['OMP_NUM_THREADS'] = '1'
+                # command = [
+                #     'python',
+                #     '-m', 'torch.distributed.launch',
+                #     '--nproc_per_node', str(self.world_size), 
+                #     ddp_worker_path,
+                #     '--path', ddp_tmp_path,
+                #     '--origin', str(origin)
+                # ]
                 command = [
-                    'python',
-                    '-m', 'torch.distributed.launch',
+                    'torchrun',
+                    '--standalone',
+                    '--nnodes', '1',
                     '--nproc_per_node', str(self.world_size), 
                     ddp_worker_path,
                     '--path', ddp_tmp_path,

@@ -45,12 +45,12 @@ def ddp_worker(path, rank, origin):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--local_rank', type=int, required=True)
     parser.add_argument('--path', type=str, required=True)
     parser.add_argument('--origin', type=str, required=True)
     opt = parser.parse_args()
+    local_rank = int(os.environ["LOCAL_RANK"])
     try:
-        ddp_worker(opt.path, opt.local_rank, opt.origin)
+        ddp_worker(opt.path, local_rank, opt.origin)
     except Exception as e:
         print(traceback.format_exc())
         if Path(opt.path).exists():
