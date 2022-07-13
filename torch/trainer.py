@@ -300,7 +300,10 @@ class TorchTrainer:
         for key, val in self.epoch_storage.items():
             if len(val) > 0:
                 if isinstance(val[0], torch.Tensor):
-                    self.epoch_storage[key] = torch.stack(val, dim=0)
+                    try:
+                        self.epoch_storage[key] = torch.cat(val)
+                    except:
+                        self.epoch_storage[key] = torch.stack(val, dim=0)
                 else:
                     self.epoch_storage[key] = torch.tensor(val).to(self.device)
 
@@ -374,7 +377,10 @@ class TorchTrainer:
         for key, val in self.epoch_storage.items():
             if len(val) > 0:
                 if isinstance(val[0], torch.Tensor):
-                    self.epoch_storage[key] = torch.stack(val, dim=0)
+                    try:
+                        self.epoch_storage[key] = torch.cat(val)
+                    except:
+                        self.epoch_storage[key] = torch.stack(val, dim=0)
                 else:
                     self.epoch_storage[key] = torch.tensor(val).to(self.device)
 
@@ -525,7 +531,7 @@ class TorchTrainer:
                 inputs = [t.to(self.device) for t in inputs]
                 approx = self.forward_test(self, inputs)
                 prediction.append(approx.detach())
-        prediction = torch.stack(prediction, dim=0).cpu().numpy()
+        prediction = torch.cat(prediction).cpu().numpy()
 
         return prediction
 
