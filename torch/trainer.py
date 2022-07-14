@@ -74,6 +74,11 @@ class TorchTrainer:
         self.ddp_sync_batch_norm = True
         self.ddp_average_loss = True
         self.ddp_sync_last = False # deprecated
+        self.ddp_params = dict(
+            broadcast_buffers=True, 
+            static_graph=True,
+            # find_unused_parameters=True
+            )
         self.ddp_workers = -1
         # MISC
         self.debug = False
@@ -120,8 +125,7 @@ class TorchTrainer:
                 self.model = SyncBatchNorm.convert_sync_batchnorm(self.model)
             self.model = DistributedDataParallel(
                 self.model.to(self.rank), device_ids=[self.rank],
-                broadcast_buffers=False,
-                find_unused_parameters=True
+                **self.ddp_params
             )
             if hasattr(self, 'criterion'):
                 self.criterion = self.criterion.to(self.rank)
