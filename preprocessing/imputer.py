@@ -5,10 +5,8 @@ import lightgbm as lgb
 from .utils import analyze_column
 from ..utils import is_env_notebook
 
-if is_env_notebook:
-    from tqdm.notebook import tqdm
-else:
-    from tqdm import tqdm
+# Atomatically import tqdm: notebook or otherwise. 
+from tqdm.auto import tqdm
 
 class LGBMImputer:
     '''
