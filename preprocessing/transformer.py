@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, PowerTransformer, QuantileTransformer
 from copy import copy
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 
 class _DistTransformer:
