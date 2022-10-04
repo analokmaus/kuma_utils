@@ -3,7 +3,6 @@ import pandas as pd
 import lightgbm as lgb
 
 from .utils import analyze_column
-from ..utils import is_env_notebook
 
 # Atomatically import tqdm: notebook or otherwise. 
 from tqdm.auto import tqdm
