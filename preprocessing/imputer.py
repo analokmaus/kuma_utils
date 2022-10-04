@@ -4,7 +4,7 @@ import lightgbm as lgb
 
 from .utils import analyze_column
 
-# Atomatically import tqdm: notebook or otherwise. 
+# Automatically import tqdm: notebook or otherwise. 
 from tqdm.auto import tqdm
 
 class LGBMImputer:
