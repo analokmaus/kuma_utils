@@ -194,7 +194,7 @@ class TorchTrainer:
             curr_time = time.time()
             elapsed_time = curr_time - start_time
             if self.rank == 0 and self.state['epoch'] == 0 and elapsed_time > 30 and not ett_disp: # show ETA
-                ett = elapsed_time * batch_total // batch_i
+                ett = elapsed_time * batch_total // (batch_i + 1)
                 self.logger(f'Estimated epoch training time: {int(ett)} s')
                 try:
                     ram_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
