@@ -71,7 +71,7 @@ class TorchTrainer:
 
         ### Implicit attributes
         # DDP
-        self.ddp_sync_batch_norm = True
+        self.ddp_sync_batch_norm = SyncBatchNorm.convert_sync_batchnorm
         self.ddp_average_loss = True
         self.ddp_sync_last = False # deprecated
         self.ddp_params = dict(
@@ -121,8 +121,7 @@ class TorchTrainer:
             self.logger(f'DataParallel on devices {self.device_ids}')
 
         elif self.parallel == 'ddp': # DDP on cuda
-            if self.ddp_sync_batch_norm:
-                self.model = SyncBatchNorm.convert_sync_batchnorm(self.model)
+            self.model = self.ddp_sync_batch_norm(self.model)
             self.model = DistributedDataParallel(
                 self.model.to(self.rank), device_ids=[self.rank],
                 **self.ddp_params
@@ -685,19 +684,13 @@ class TorchTrainer:
                     self.__class__)).parent/'ddp_worker.py'
                 env_copy = os.environ.copy()
                 env_copy['OMP_NUM_THREADS'] = '1'
-                # command = [
-                #     'python',
-                #     '-m', 'torch.distributed.launch',
-                #     '--nproc_per_node', str(self.world_size), 
-                #     ddp_worker_path,
-                #     '--path', ddp_tmp_path,
-                #     '--origin', str(origin)
-                # ]
+                
                 command = [
                     'torchrun',
                     '--standalone',
                     '--nnodes', '1',
                     '--nproc_per_node', str(self.world_size), 
+                    '--rdzv_endpoint', dist_url,
                     ddp_worker_path,
                     '--path', ddp_tmp_path,
                     '--origin', str(origin)
