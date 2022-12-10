@@ -4,6 +4,8 @@ import traceback
 from pathlib import Path
 import sys
 import os
+import multiprocessing
+multiprocessing.current_process().authkey = '0'.encode('utf-8')
 
 
 class CustomUnpickler(pickle.Unpickler):
