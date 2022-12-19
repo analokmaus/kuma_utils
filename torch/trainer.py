@@ -81,6 +81,7 @@ class TorchTrainer:
             )
         self.ddp_workers = -1
         # MISC
+        self.loader_to_callback = False
         self.debug = False
 
     def _register_callbacks(self, callbacks):
@@ -264,11 +265,19 @@ class TorchTrainer:
                             self.optimizer.step()
                     if self.batch_scheduler:
                         self.scheduler.step()
-            
+
             if torch.isnan(loss).any():
-                self.logger(f'{torch.isnan(loss).sum()} NaN detected in loss. ({batch_i}/{len(loader)})')
+                if self.rank == 0:
+                    self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(loss).sum()} NaN detected in loss.')
+                loss = torch.nan_to_num(loss)
+                for input_i, input_t in enumerate(inputs):
+                    if torch.isnan(input_t).any():
+                        if self.rank == 0:
+                            self.logger(f'[{self.rank}] NaN detected in {input_i}-th input.')
             if torch.isnan(approx).any():
-                self.logger(f'{torch.isnan(approx).sum()} NaN detected in output tensor. ({batch_i}/{len(loader)})')
+                if self.rank == 0:
+                    self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(approx).sum()} NaN detected in output tensor.')
+                approx = torch.nan_to_num(approx)
             
             if self.parallel == 'ddp' and self.ddp_average_loss:
                 if self.xla:
@@ -304,22 +313,22 @@ class TorchTrainer:
             if len(val) > 0:
                 if isinstance(val[0], torch.Tensor):
                     try:
-                        self.epoch_storage[key] = torch.cat(val)
+                        self.epoch_storage[key] = torch.nan_to_num(torch.cat(val))
                     except:
-                        self.epoch_storage[key] = torch.stack(val, dim=0)
+                        self.epoch_storage[key] = torch.nan_to_num(torch.stack(val, dim=0))
                 else:
-                    self.epoch_storage[key] = torch.tensor(val).to(self.device)
+                    self.epoch_storage[key] = torch.nan_to_num(torch.tensor(val)).to(self.device)
 
-        loss_total = self.epoch_storage['loss'].mean().item()
+        loss_total = torch.nan_to_num(self.epoch_storage['loss']).mean().item()
 
         if self.parallel == 'ddp':
             # gather tensors
             for key, val in self.epoch_storage.items():
                 if len(val) > 0:
                     if self.xla:
-                        self.epoch_storage[key] = xm.all_gather(val)
+                        self.epoch_storage[key] = torch.nan_to_num(xm.all_gather(val))
                     else:
-                        self.epoch_storage[key] = comm.gather_tensor(val)
+                        self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
 
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
@@ -354,9 +363,13 @@ class TorchTrainer:
                 inputs = [t.to(self.device) for t in inputs]
                 loss, approx = self.forward_valid(self, inputs)
                 if torch.isnan(loss).any():
-                    self.logger(f'{torch.isnan(loss).sum()} NaN detected in loss. ({batch_i}/{len(loader)})')
+                    if self.rank == 0:
+                        self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(loss).sum()} NaN detected in loss.')
+                    loss = torch.nan_to_num(loss)
                 if torch.isnan(approx).any():
-                    self.logger(f'{torch.isnan(approx).sum()} NaN detected in output tensor. ({batch_i}/{len(loader)})')
+                    if self.rank == 0:
+                        self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(approx).sum()} NaN detected in output tensor.')
+                    approx = torch.nan_to_num(approx)
                 self.evaluate_batch(self, inputs, approx)
                 if self.parallel == 'ddp' and self.ddp_average_loss:
                     if self.xla:
@@ -381,21 +394,21 @@ class TorchTrainer:
             if len(val) > 0:
                 if isinstance(val[0], torch.Tensor):
                     try:
-                        self.epoch_storage[key] = torch.cat(val)
+                        self.epoch_storage[key] = torch.nan_to_num(torch.cat(val))
                     except:
-                        self.epoch_storage[key] = torch.stack(val, dim=0)
+                        self.epoch_storage[key] = torch.nan_to_num(torch.stack(val, dim=0))
                 else:
-                    self.epoch_storage[key] = torch.tensor(val).to(self.device)
+                    self.epoch_storage[key] = torch.nan_to_num(torch.tensor(val)).to(self.device)
 
-        loss_total = self.epoch_storage['loss'].mean().item()
+        loss_total = torch.nan_to_num(self.epoch_storage['loss']).mean().item()
 
         if self.parallel == 'ddp':
             for key, val in self.epoch_storage.items():
                 if len(val) > 0:
                     if self.xla:
-                        self.epoch_storage[key] = xm.all_gather(val)
+                        self.epoch_storage[key] = torch.nan_to_num(xm.all_gather(val))
                     else:
-                        self.epoch_storage[key] = comm.gather_tensor(val)
+                        self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
 
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
@@ -423,7 +436,10 @@ class TorchTrainer:
 
             ''' before epoch callbacks '''
             for func in self.before_epoch:
-                func(self)
+                if self.loader_to_callback:
+                    func(self, loader, loader_valid)
+                else:
+                    func(self)
 
             ''' Training loop '''
             loss_train, metric_train, monitor_metrics_train = \
@@ -461,7 +477,10 @@ class TorchTrainer:
             if self.rank != 0 and not self.debug:
                 after_trains = after_trains[:-1]
             for func in after_trains:
-                func(self)
+                if self.loader_to_callback:
+                    func(self, loader, loader_valid)
+                else:
+                    func(self)
             self._states.append(self.state.copy())
 
             if self.checkpoint and self.rank == 0:

@@ -35,7 +35,7 @@ class EarlyStopping(CallbackTemplate):
             'best_epoch': None
         }
 
-    def after_epoch(self, env):
+    def after_epoch(self, env, loader=None, loader_valid=None):
         score = env.state[self.state['target']]
         epoch = env.state['epoch'] # local epoch
         if epoch < self.state['skip_epoch'] or epoch == 0:
@@ -67,4 +67,4 @@ class EarlyStopping(CallbackTemplate):
         self.state = checkpoint
 
     def __repr__(self):
-        return f'EarlyStopping(\n{pformat(self.state, compact=True, indent=2)})'
+        return f'EarlyStopping(patience={self.state["patience"]}, skip_epoch={self.state["skip_epoch"]})'

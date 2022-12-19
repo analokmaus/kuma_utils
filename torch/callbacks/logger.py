@@ -37,7 +37,7 @@ class TorchLogger:
             with open(self.path, 'a') as f:
                 f.write(log_str + '\n')
 
-    def after_epoch(self, env):
+    def after_epoch(self, env, loader=None, loader_valid=None):
         ''' callback '''
         epoch = env.state['epoch']
         if epoch % self.verbose_eval != 0:
