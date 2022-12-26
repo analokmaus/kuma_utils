@@ -10,7 +10,7 @@ class SaveEveryEpoch(CallbackTemplate):
     def __init__(self, patience=5, target='valid_metric', maximize=False, skip_epoch=0):
         super().__init__()
         
-    def after_epoch(self, env):
+    def after_epoch(self, env, loader=None, loader_valid=None):
         env.checkpoint = True
     
 
