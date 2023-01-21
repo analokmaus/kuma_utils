@@ -24,6 +24,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DataParallel, DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn import SyncBatchNorm
+from torch.utils.data.sampler import Sampler
 
 from .utils import get_device, seed_everything, get_gpu_memory
 from .tb_logger import DummyTensorBoardLogger
@@ -33,6 +34,7 @@ from .callbacks import (
 from .hooks import TrainHook
 from . import distributed as comm
 from .clip_grad import dispatch_clip_grad
+from .sampler import DistributedProxySampler
 
 try:
     from torch.cuda import amp
@@ -152,8 +154,12 @@ class TorchTrainer:
             k: v for k, v in loader.__dict__.items()
             if not k.startswith('_') and k not in skip_keys
         }
-        sampler = DistributedSampler(
-            loader.dataset, num_replicas=self.world_size, rank=self.rank, shuffle=shuffle)
+        if isinstance(loader.sampler, Sampler):
+            sampler = DistributedProxySampler(
+                loader.sampler, num_replicas=self.world_size, rank=self.rank)
+        else:
+            sampler = DistributedSampler(
+                loader.dataset, num_replicas=self.world_size, rank=self.rank, shuffle=shuffle)
         dl_args['sampler'] = sampler
         if self.ddp_workers == -1:
             dl_args['num_workers'] = int(
@@ -532,11 +538,12 @@ class TorchTrainer:
 
     def predict(self, loader, parallel=None, progress_bar=False):
         self.parallel = parallel
+        if self.logger is None:
+            self.logger = DummyLogger('')
         if not self._register_ready: # is hook and callbacks registered?
             raise AttributeError('Register hook and callbacks by .register() method.')
         if not self._model_ready: # is model configured?
             self.fp16 = False
-            self.logger = DummyLogger('')
             if parallel == 'ddp':
                 raise NotImplementedError('DDP prediction is not implemented.')
             else:
