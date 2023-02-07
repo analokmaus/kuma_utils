@@ -7,7 +7,7 @@ class SaveEveryEpoch(CallbackTemplate):
     Save snapshot every epoch
     '''
 
-    def __init__(self, patience=5, target='valid_metric', maximize=False, skip_epoch=0):
+    def __init__(self, ):
         super().__init__()
         
     def after_epoch(self, env, loader=None, loader_valid=None):
