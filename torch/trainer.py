@@ -514,8 +514,9 @@ class TorchTrainer:
         comm.sync()
         torch.cuda.set_device(self.rank)
         if self.rank == 0:
+            self.ddp_tmp_path.unlink()
             self.logger(f'All processes initialized.')
-
+        
         ''' Configure model and loader '''
         self._configure_model()
         loader = self._configure_loader_ddp(loader)
@@ -536,14 +537,14 @@ class TorchTrainer:
             loader_valid.per_device_loader(self.device),
             num_epochs)
 
-    def predict(self, loader, parallel=None, progress_bar=False):
+    def predict(self, loader, parallel=None, fp16=False, progress_bar=False):
         self.parallel = parallel
         if self.logger is None:
             self.logger = DummyLogger('')
         if not self._register_ready: # is hook and callbacks registered?
             raise AttributeError('Register hook and callbacks by .register() method.')
         if not self._model_ready: # is model configured?
-            self.fp16 = False
+            self.fp16 = fp16
             if parallel == 'ddp':
                 raise NotImplementedError('DDP prediction is not implemented.')
             else:
@@ -558,7 +559,11 @@ class TorchTrainer:
         with torch.no_grad():
             for inputs in iterator:
                 inputs = [t.to(self.device) for t in inputs]
-                approx = self.forward_test(self, inputs)
+                if self.fp16:
+                    with amp.autocast():
+                        approx = self.forward_test(self, inputs)
+                else:
+                    approx = self.forward_test(self, inputs)
                 prediction.append(approx.detach())
         prediction = torch.cat(prediction).cpu().numpy()
 
@@ -704,6 +709,7 @@ class TorchTrainer:
                     'num_epochs': num_epochs
                 }
                 ddp_tmp_path = Path(f'.ku_ddp_tmp_{session_id}')
+                self.ddp_tmp_path = ddp_tmp_path
                 with open(ddp_tmp_path, 'wb') as f:
                     pickle.dump(ddp_tmp, f)
                 ddp_worker_path = Path(inspect.getfile(
