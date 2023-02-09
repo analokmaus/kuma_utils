@@ -65,11 +65,14 @@ def _save_average_snapshot(
         module = trainer.model
 
     if path.exists():
-        if trainer.xla:
-            import torch_xla.utils.serialization as xser
-            checkpoints = xser.load(str(path))['checkpoints']
-        else:
-            checkpoints = torch.load(str(path), map_location='cpu')['checkpoints']
+        try:
+            if trainer.xla:
+                import torch_xla.utils.serialization as xser
+                checkpoints = xser.load(str(path))['checkpoints']
+            else:
+                checkpoints = torch.load(str(path), map_location='cpu')['checkpoints']
+        except:
+            checkpoints = []
     else:
         checkpoints = []
 

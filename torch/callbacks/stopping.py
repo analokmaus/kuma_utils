@@ -1,5 +1,6 @@
 from .base import CallbackTemplate
 from pprint import pformat
+import numpy as np
 
 
 class SaveEveryEpoch(CallbackTemplate):
@@ -68,3 +69,59 @@ class EarlyStopping(CallbackTemplate):
 
     def __repr__(self):
         return f'EarlyStopping(patience={self.state["patience"]}, skip_epoch={self.state["skip_epoch"]})'
+
+
+class CollectTopK(CallbackTemplate):
+    '''
+    Collect top k checkpoints for weight average snapshot
+    k: int              = 
+    target: str         = 
+    maximize: bool      = 
+    '''
+
+    def __init__(self, k=3, target='valid_metric', maximize=False, ):
+        super().__init__()
+        self.state = {
+            'k': k,
+            'target': target,
+            'maximize': maximize,
+            'best_scores': np.array([]),
+            'best_epochs': np.array([])
+        }
+
+    def after_epoch(self, env, loader=None, loader_valid=None):
+        score = env.state[self.state['target']]
+        epoch = env.state['epoch'] # local epoch
+        if len(self.state['best_scores']) < self.state['k']:
+            self.state['best_scores'] = np.append(self.state['best_scores'], score)
+            self.state['best_epochs'] = np.append(self.state['best_epochs'], env.global_epoch)
+            if self.state['maximize']:
+                rank = np.argsort(-self.state['best_scores'])
+            else:
+                rank = np.argsort(self.state['best_scores'])
+                
+            env.checkpoint = True
+            env.state['best_score'] = self.state['best_scores'][rank][0]
+            env.state['best_epoch'] = self.state['best_epochs'][rank][0]
+
+        elif (self.state['maximize'] and score > np.min(self.state['best_scores'])) or \
+                (not self.state['maximize'] and score < np.max(self.state['best_scores'])):
+            if self.state['maximize']:
+                del_idx = np.argmin(self.state['best_scores'])
+            else:
+                del_idx = np.argmax(self.state['best_scores'])
+            self.state['best_scores'] = np.delete(self.state['best_scores'], del_idx)
+            self.state['best_epochs'] = np.delete(self.state['best_epochs'], del_idx)
+            self.state['best_scores'] = np.append(self.state['best_scores'], score)
+            self.state['best_epochs'] = np.append(self.state['best_epochs'], env.global_epoch)
+            if self.state['maximize']:
+                rank = np.argsort(-self.state['best_scores'])
+            else:
+                rank = np.argsort(self.state['best_scores'])
+                
+            env.checkpoint = True
+            env.state['best_score'] = self.state['best_scores'][rank][0]
+            env.state['best_epoch'] = self.state['best_epochs'][rank][0]
+
+    def __repr__(self):
+        return f'CollectTopK(k={self.state["k"]})'
