@@ -86,7 +86,8 @@ class CollectTopK(CallbackTemplate):
             'target': target,
             'maximize': maximize,
             'best_scores': np.array([]),
-            'best_epochs': np.array([])
+            'best_epochs': np.array([]),
+            'counter': 0
         }
 
     def after_epoch(self, env, loader=None, loader_valid=None):
@@ -122,6 +123,11 @@ class CollectTopK(CallbackTemplate):
             env.checkpoint = True
             env.state['best_score'] = self.state['best_scores'][rank][0]
             env.state['best_epoch'] = self.state['best_epochs'][rank][0]
+            self.state['counter'] = 0
+        else:
+            self.state['counter'] += 1
+        
+        env.state['patience'] = self.state['counter']
 
     def __repr__(self):
         return f'CollectTopK(k={self.state["k"]})'

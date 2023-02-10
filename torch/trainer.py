@@ -565,7 +565,7 @@ class TorchTrainer:
                 else:
                     approx = self.forward_test(self, inputs)
                 prediction.append(approx.detach())
-        prediction = torch.cat(prediction).cpu().numpy()
+        prediction = torch.cat(prediction).float().cpu().numpy()
 
         return prediction
 
