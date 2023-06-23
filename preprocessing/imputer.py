@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
+from tqdm.auto import tqdm
 
 from .utils import analyze_column
 
@@ -30,8 +31,13 @@ class LGBMImputer:
             X = pd.DataFrame(X, columns=self.feature_names)
         self.feature_with_missing = [
             col for col in self.feature_names if X[col].isnull().sum() > 0]
+        
+        if self.verbose:
+            iterator = enumerate(tqdm(self.feature_with_missing))
+        else:
+            iterator = enumerate(self.feature_with_missing)
 
-        for icol, col in enumerate(self.feature_with_missing):
+        for icol, col in iterator:
             if icol in self.cat_features:
                 nuni = X[col].dropna().nunique()
                 if nuni == 2:
