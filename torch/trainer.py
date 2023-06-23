@@ -24,6 +24,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DataParallel, DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn import SyncBatchNorm
+from torch.utils.data.sampler import Sampler
 
 from .utils import get_device, seed_everything, get_gpu_memory
 from .tb_logger import DummyTensorBoardLogger
@@ -33,6 +34,7 @@ from .callbacks import (
 from .hooks import TrainHook
 from . import distributed as comm
 from .clip_grad import dispatch_clip_grad
+from .sampler import DistributedProxySampler
 
 try:
     from torch.cuda import amp
@@ -71,11 +73,17 @@ class TorchTrainer:
 
         ### Implicit attributes
         # DDP
-        self.ddp_sync_batch_norm = True
+        self.ddp_sync_batch_norm = SyncBatchNorm.convert_sync_batchnorm
         self.ddp_average_loss = True
         self.ddp_sync_last = False # deprecated
+        self.ddp_params = dict(
+            broadcast_buffers=True, 
+            static_graph=True,
+            # find_unused_parameters=True
+            )
         self.ddp_workers = -1
         # MISC
+        self.loader_to_callback = False
         self.debug = False
 
     def _register_callbacks(self, callbacks):
@@ -116,12 +124,10 @@ class TorchTrainer:
             self.logger(f'DataParallel on devices {self.device_ids}')
 
         elif self.parallel == 'ddp': # DDP on cuda
-            if self.ddp_sync_batch_norm:
-                self.model = SyncBatchNorm.convert_sync_batchnorm(self.model)
+            self.model = self.ddp_sync_batch_norm(self.model)
             self.model = DistributedDataParallel(
                 self.model.to(self.rank), device_ids=[self.rank],
-                broadcast_buffers=False,
-                find_unused_parameters=True
+                **self.ddp_params
             )
             if hasattr(self, 'criterion'):
                 self.criterion = self.criterion.to(self.rank)
@@ -148,8 +154,12 @@ class TorchTrainer:
             k: v for k, v in loader.__dict__.items()
             if not k.startswith('_') and k not in skip_keys
         }
-        sampler = DistributedSampler(
-            loader.dataset, num_replicas=self.world_size, rank=self.rank, shuffle=shuffle)
+        if isinstance(loader.sampler, Sampler):
+            sampler = DistributedProxySampler(
+                loader.sampler, num_replicas=self.world_size, rank=self.rank)
+        else:
+            sampler = DistributedSampler(
+                loader.dataset, num_replicas=self.world_size, rank=self.rank, shuffle=shuffle)
         dl_args['sampler'] = sampler
         if self.ddp_workers == -1:
             dl_args['num_workers'] = int(
@@ -190,7 +200,7 @@ class TorchTrainer:
             curr_time = time.time()
             elapsed_time = curr_time - start_time
             if self.rank == 0 and self.state['epoch'] == 0 and elapsed_time > 30 and not ett_disp: # show ETA
-                ett = elapsed_time * batch_total // batch_i
+                ett = elapsed_time * batch_total // (batch_i + 1)
                 self.logger(f'Estimated epoch training time: {int(ett)} s')
                 try:
                     ram_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
@@ -261,11 +271,19 @@ class TorchTrainer:
                             self.optimizer.step()
                     if self.batch_scheduler:
                         self.scheduler.step()
-            
+
             if torch.isnan(loss).any():
-                self.logger(f'{torch.isnan(loss).sum()} NaN detected in loss. ({batch_i}/{len(loader)})')
+                if self.rank == 0:
+                    self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(loss).sum()} NaN detected in loss.')
+                loss = torch.nan_to_num(loss)
+                for input_i, input_t in enumerate(inputs):
+                    if torch.isnan(input_t).any():
+                        if self.rank == 0:
+                            self.logger(f'[{self.rank}] NaN detected in {input_i}-th input.')
             if torch.isnan(approx).any():
-                self.logger(f'{torch.isnan(approx).sum()} NaN detected in output tensor. ({batch_i}/{len(loader)})')
+                if self.rank == 0:
+                    self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(approx).sum()} NaN detected in output tensor.')
+                approx = torch.nan_to_num(approx)
             
             if self.parallel == 'ddp' and self.ddp_average_loss:
                 if self.xla:
@@ -300,20 +318,23 @@ class TorchTrainer:
         for key, val in self.epoch_storage.items():
             if len(val) > 0:
                 if isinstance(val[0], torch.Tensor):
-                    self.epoch_storage[key] = torch.cat(val)
+                    try:
+                        self.epoch_storage[key] = torch.nan_to_num(torch.cat(val))
+                    except:
+                        self.epoch_storage[key] = torch.nan_to_num(torch.stack(val, dim=0))
                 else:
-                    self.epoch_storage[key] = torch.tensor(val).to(self.device)
+                    self.epoch_storage[key] = torch.nan_to_num(torch.tensor(val)).to(self.device)
 
-        loss_total = self.epoch_storage['loss'].mean().item()
+        loss_total = torch.nan_to_num(self.epoch_storage['loss']).mean().item()
 
         if self.parallel == 'ddp':
             # gather tensors
             for key, val in self.epoch_storage.items():
                 if len(val) > 0:
                     if self.xla:
-                        self.epoch_storage[key] = xm.all_gather(val)
+                        self.epoch_storage[key] = torch.nan_to_num(xm.all_gather(val))
                     else:
-                        self.epoch_storage[key] = comm.gather_tensor(val)
+                        self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
 
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
@@ -348,9 +369,13 @@ class TorchTrainer:
                 inputs = [t.to(self.device) for t in inputs]
                 loss, approx = self.forward_valid(self, inputs)
                 if torch.isnan(loss).any():
-                    self.logger(f'{torch.isnan(loss).sum()} NaN detected in loss. ({batch_i}/{len(loader)})')
+                    if self.rank == 0:
+                        self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(loss).sum()} NaN detected in loss.')
+                    loss = torch.nan_to_num(loss)
                 if torch.isnan(approx).any():
-                    self.logger(f'{torch.isnan(approx).sum()} NaN detected in output tensor. ({batch_i}/{len(loader)})')
+                    if self.rank == 0:
+                        self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(approx).sum()} NaN detected in output tensor.')
+                    approx = torch.nan_to_num(approx)
                 self.evaluate_batch(self, inputs, approx)
                 if self.parallel == 'ddp' and self.ddp_average_loss:
                     if self.xla:
@@ -374,19 +399,22 @@ class TorchTrainer:
         for key, val in self.epoch_storage.items():
             if len(val) > 0:
                 if isinstance(val[0], torch.Tensor):
-                    self.epoch_storage[key] = torch.cat(val)
+                    try:
+                        self.epoch_storage[key] = torch.nan_to_num(torch.cat(val))
+                    except:
+                        self.epoch_storage[key] = torch.nan_to_num(torch.stack(val, dim=0))
                 else:
-                    self.epoch_storage[key] = torch.tensor(val).to(self.device)
+                    self.epoch_storage[key] = torch.nan_to_num(torch.tensor(val)).to(self.device)
 
-        loss_total = self.epoch_storage['loss'].mean().item()
+        loss_total = torch.nan_to_num(self.epoch_storage['loss']).mean().item()
 
         if self.parallel == 'ddp':
             for key, val in self.epoch_storage.items():
                 if len(val) > 0:
                     if self.xla:
-                        self.epoch_storage[key] = xm.all_gather(val)
+                        self.epoch_storage[key] = torch.nan_to_num(xm.all_gather(val))
                     else:
-                        self.epoch_storage[key] = comm.gather_tensor(val)
+                        self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
 
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
@@ -414,7 +442,10 @@ class TorchTrainer:
 
             ''' before epoch callbacks '''
             for func in self.before_epoch:
-                func(self)
+                if self.loader_to_callback:
+                    func(self, loader, loader_valid)
+                else:
+                    func(self)
 
             ''' Training loop '''
             loss_train, metric_train, monitor_metrics_train = \
@@ -452,7 +483,10 @@ class TorchTrainer:
             if self.rank != 0 and not self.debug:
                 after_trains = after_trains[:-1]
             for func in after_trains:
-                func(self)
+                if self.loader_to_callback:
+                    func(self, loader, loader_valid)
+                else:
+                    func(self)
             self._states.append(self.state.copy())
 
             if self.checkpoint and self.rank == 0:
@@ -480,8 +514,9 @@ class TorchTrainer:
         comm.sync()
         torch.cuda.set_device(self.rank)
         if self.rank == 0:
+            self.ddp_tmp_path.unlink()
             self.logger(f'All processes initialized.')
-
+        
         ''' Configure model and loader '''
         self._configure_model()
         loader = self._configure_loader_ddp(loader)
@@ -502,13 +537,14 @@ class TorchTrainer:
             loader_valid.per_device_loader(self.device),
             num_epochs)
 
-    def predict(self, loader, parallel=None, progress_bar=False):
+    def predict(self, loader, parallel=None, fp16=False, progress_bar=False):
         self.parallel = parallel
+        if self.logger is None:
+            self.logger = DummyLogger('')
         if not self._register_ready: # is hook and callbacks registered?
             raise AttributeError('Register hook and callbacks by .register() method.')
         if not self._model_ready: # is model configured?
-            self.fp16 = False
-            self.logger = DummyLogger('')
+            self.fp16 = fp16
             if parallel == 'ddp':
                 raise NotImplementedError('DDP prediction is not implemented.')
             else:
@@ -523,9 +559,13 @@ class TorchTrainer:
         with torch.no_grad():
             for inputs in iterator:
                 inputs = [t.to(self.device) for t in inputs]
-                approx = self.forward_test(self, inputs)
+                if self.fp16:
+                    with amp.autocast():
+                        approx = self.forward_test(self, inputs)
+                else:
+                    approx = self.forward_test(self, inputs)
                 prediction.append(approx.detach())
-        prediction = torch.cat(prediction).cpu().numpy()
+        prediction = torch.cat(prediction).float().cpu().numpy()
 
         return prediction
 
@@ -669,16 +709,20 @@ class TorchTrainer:
                     'num_epochs': num_epochs
                 }
                 ddp_tmp_path = Path(f'.ku_ddp_tmp_{session_id}')
+                self.ddp_tmp_path = ddp_tmp_path
                 with open(ddp_tmp_path, 'wb') as f:
                     pickle.dump(ddp_tmp, f)
                 ddp_worker_path = Path(inspect.getfile(
                     self.__class__)).parent/'ddp_worker.py'
                 env_copy = os.environ.copy()
                 env_copy['OMP_NUM_THREADS'] = '1'
+                
                 command = [
-                    'python',
-                    '-m', 'torch.distributed.launch',
+                    'torchrun',
+                    '--standalone',
+                    '--nnodes', '1',
                     '--nproc_per_node', str(self.world_size), 
+                    '--rdzv_endpoint', dist_url,
                     ddp_worker_path,
                     '--path', ddp_tmp_path,
                     '--origin', str(origin)

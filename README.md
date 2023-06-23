@@ -17,13 +17,6 @@ Copy all the files to your working directory via:
 
 See tutorial notebooks below.
 
-For compatibility, old version of kuma_utils can be found in branch `2019`. 
-Checkout to the branch via 
-
-`git checkout 2019` 
-
-as needed.
-
 ## WIP
 1. Multi-node DDP
 
@@ -98,9 +91,10 @@ Follow [official instructions](https://github.com/pytorch/xla).
     ┣ EarlyStopping             - Early stopping callback for TorchTrainer.
     ┣ SaveEveryEpoch            - Save snapshot at the end of every epoch.
     ┣ SaveSnapshot              - Checkpoint callback.
+    ┣ SaveAverageSnapshot       - Moving average snapshot callback.
     ┣ TorchLogger               - Logger
     ┣ TensorBoardLogger         - TensorBoard Logger
-    ┣ SimpleHook                - Simple train hook for almost all the tasks (see tutorial).
+    ┣ SimpleHook                - Simple train hook for almost any tasks (see tutorial).
     ┣ TemperatureScaler         - Probability calibration for pytorch models.
 
 ```

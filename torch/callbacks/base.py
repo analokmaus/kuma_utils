@@ -9,10 +9,10 @@ class CallbackTemplate:
     def __init__(self):
         pass
 
-    def before_epoch(self, env):
+    def before_epoch(self, env, loader=None, loader_valid=None):
         pass
 
-    def after_epoch(self, env):
+    def after_epoch(self, env, loader=None, loader_valid=None):
         pass
 
     def save_snapshot(self, trainer, path):
