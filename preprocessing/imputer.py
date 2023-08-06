@@ -112,15 +112,16 @@ class LGBMImputer:
             null_idx = X[col].isnull()
             x_test = X.loc[null_idx].drop(col, axis=1)
 
-            y_test = model.predict(x_test)
-            if objective == 'multiclass':
-                y_test = np.argmax(y_test, axis=1).astype(float)
-            elif objective == 'binary':
-                y_test = (y_test > 0.5).astype(float)
-            y_test += y_offset
-            output_X.loc[null_idx, col] = y_test
-            if objective in ['multiclass', 'binary']:
-                output_X[col] = output_X[col].astype(int)
+            if not x_test.empty:
+                y_test = model.predict(x_test)
+                if objective == 'multiclass':
+                    y_test = np.argmax(y_test, axis=1).astype(float)
+                elif objective == 'binary':
+                    y_test = (y_test > 0.5).astype(float)
+                y_test += y_offset
+                output_X.loc[null_idx, col] = y_test
+                if objective in ['multiclass', 'binary']:
+                    output_X[col] = output_X[col].astype(int)
 
         return output_X
         
