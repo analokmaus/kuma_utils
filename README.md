@@ -1,4 +1,4 @@
-# Kuma-san's Toolkit 2020
+# Kuma-san's Toolkit 2024
 
 ```
 　 　 　┼╂┼
@@ -10,33 +10,29 @@
 / ＿＿   ヽノ /´>  )
 (＿＿＿）    / (_／
 ```
-## Usage
-Copy all the files to your working directory via:
 
-`git clone https://github.com/analokmaus/kuma_utils.git`
+# Overview
+## What's new
+- Wandb integration
+- Upgrade to newer backend libraries
 
-See tutorial notebooks below.
-
-## WIP
-1. Multi-node DDP
+## Work in progress
+- Multi-node DDP
 
 # Environment
-Create a new environment and:
+## Setup with Poetry
+```
+git clone https://github.com/analokmaus/kuma_utils.git
+cd kuma_utils
+poetry install
+```
 
-`pip install -r reqirements.txt`
-## Optional requirements
-### xfeat
-`pip install -q https://github.com/pfnet-research/xfeat/archive/master.zip`
-### Category Encoders
-`pip install category_encoders`
-### **PyTorch**
-For mixed precision training, you must install version `>= 1.6.0` . 
-Follow [official instructions](https://pytorch.org/get-started/locally/).
-### Pytorch/XLA
-Follow [official instructions](https://github.com/pytorch/xla).
-### japanize-matplotlib
-`pip install japanize-matplotlib`
-
+# Tutorial
+- [Exploratory data analysis](examples/Exploratory_data_analysis.ipynb)
+- [Data preprocessing](examples/Data_preprocessing.ipynb)
+- [Train and validate scikit-learn API models](examples/Train_and_validate_models.ipynb)
+- [Train pytorch models on single GPU](examples/Train_CNN_model.ipynb)
+- [Train pytorch models on multiple GPU](examples/Train_CNN_distributed.py)
 
 # Directory
 ```
@@ -44,9 +40,6 @@ Follow [official instructions](https://github.com/pytorch/xla).
 ┃   ┣ explore_data              - Simple exploratory data analysis.
 ┃
 ┣ preprocessing
-┃   ┣ xfeat                     - xfeat modifications.
-┃   ┃   ┣ TargetEncoder
-┃   ┃   ┣ Pipeline
 ┃   ┣ DistTransformer           - Distribution transformer for numerical features. 
 ┃   ┣ LGBMImputer               - Regression imputer for missing values using LightGBM.
 ┃
@@ -59,11 +52,11 @@ Follow [official instructions](https://github.com/pytorch/xla).
 ┃       ┣ lightgbm               - Optune lightgbm integration with modifiable n_trials.
 ┃
 ┣ metrics                       - Universal metrics
-┃   ┣ SeAtFixedSp               - Sensitivity at fixed specificity.
+┃   ┣ SensitivityAtFixedSpecificity
 ┃   ┣ RMSE
 ┃   ┣ AUC
 ┃   ┣ Accuracy
-┃   ┣ QWK
+┃   ┣ QuandricWeightKappa
 ┃
 ┣ torch
     ┣ lr_scheduler
@@ -75,19 +68,15 @@ Follow [official instructions](https://github.com/pytorch/xla).
     ┃   ┣ SAM
     ┃ 
     ┣ modules
-    ┃   ┃ (activation)
     ┃   ┣ Mish
-    ┃   ┃ (pooling)
     ┃   ┣ AdaptiveConcatPool2d/3d
     ┃   ┣ GeM
-    ┃   ┃ (attention)
     ┃   ┣ CBAM2d
-    ┃   ┃ (normalization)
     ┃   ┣ GroupNorm1d/2d/3d
     ┃   ┣ convert_groupnorm     - Convert all BatchNorm to GroupNorm.
     ┃   ┣ etc...
     ┃ 
-    ┣ TorchTrainer              - PyTorch Wrapper.
+    ┣ TorchTrainer              - PyTorch Trainer.
     ┣ EarlyStopping             - Early stopping callback for TorchTrainer.
     ┣ SaveEveryEpoch            - Save snapshot at the end of every epoch.
     ┣ SaveSnapshot              - Checkpoint callback.
@@ -98,13 +87,6 @@ Follow [official instructions](https://github.com/pytorch/xla).
     ┣ TemperatureScaler         - Probability calibration for pytorch models.
 
 ```
-
-# Tutorial
-- [Exploratory data analysis](examples/Exploratory_data_analysis.ipynb)
-- [Data preprocessing](examples/Data_preprocessing.ipynb)
-- [Train and validate scikit-learn API models](examples/Train_and_validate_models.ipynb)
-- [Train CIFAR-10 (TorchTrainer tutorial)](examples/Train_CIFAR10.md)
-
 
 # License
 The source code in this repository is released under the MIT license.

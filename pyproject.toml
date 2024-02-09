@@ -1,0 +1,39 @@
+[tool.poetry]
+name = "kuma_utils"
+version = "0.1.0"
+description = ""
+authors = ["Hiroshi Yoshihara"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+torch = {version = "^2.1.1+cu118", source = "torch_cu118"}
+torchvision = {version = "^0.16.1+cu118", source = "torch_cu118"}
+torchaudio = {version = "^2.1.1+cu118", source = "torch_cu118"}
+ipykernel = "^6.29.0"
+jupyter = "^1.0.0"
+scipy = "^1.12.0"
+seaborn = "^0.13.2"
+lightgbm = "^4.3.0"
+catboost = "^1.2.2"
+xgboost = "1.7.6"
+optuna = "2.10.1"
+torchsummary = "^1.5.1"
+pyarrow = "^15.0.0"
+tensorboard = "^2.15.1"
+scikit-learn = "^1.4.0"
+japanize-matplotlib = "^1.1.3"
+openpyxl = "^3.1.2"
+wandb = "^0.16.3"
+timm = "^0.9.12"
+matplotlib-venn = "^0.11.10"
+
+
+[[tool.poetry.source]]
+name = "torch_cu118"
+url = "https://download.pytorch.org/whl/cu118"
+priority = "explicit"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
