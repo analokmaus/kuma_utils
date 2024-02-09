@@ -11,4 +11,8 @@ __pycache__/
 catboost_info/
 
 # Project
+poetry.lock
+input/
+results/
 datasets/
+wandb/
