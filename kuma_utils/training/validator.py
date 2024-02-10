@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold
 from sklearn.calibration import calibration_curve
-import optuna
+from copy import deepcopy
 
 import matplotlib.pyplot as plt
 import matplotlib.cm as colormap
@@ -21,9 +21,9 @@ import pickle
 
 class CrossValidator:
     '''
-    Amazing cross validation wrapper for sklearn models
+    Cross validation wrapper for sklearn API models
 
-    Some useful features:
+    features:
     - Automated parameter tuning using Optuna
     - Most features of Trainer are included
     '''
@@ -71,8 +71,7 @@ class CrossValidator:
               params={}, fit_params={},
               # Optuna
               tune_model=False, optuna_params=None, maximize=True,
-              eval_metric=None, n_trials=None, timeout=None, 
-              lgbm_n_trials=[7, 20, 10, 6, 20], 
+              eval_metric=None, n_trials=None, timeout=None,
               # Misc
               logger=None, n_jobs=-1):
 
@@ -117,9 +116,8 @@ class CrossValidator:
             trn = Trainer(self.model, serial=f'{self.serial}_fold{fold_i}')
             trn.train(
                 train_data=train_data, valid_data=valid_data, cat_features=cat_features,
-                params=params, fit_params=_fit_params,
+                params=params, fit_params=deepcopy(_fit_params),
                 tune_model=tune_model, optuna_params=optuna_params, 
-                lgbm_n_trials=lgbm_n_trials, 
                 maximize=maximize, eval_metric=eval_metric[0],
                 n_trials=n_trials, timeout=timeout, 
                 logger=logger, n_jobs=n_jobs

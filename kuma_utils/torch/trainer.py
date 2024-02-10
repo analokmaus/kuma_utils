@@ -1,25 +1,19 @@
 from pathlib import Path
 from tqdm import tqdm
-from copy import copy, deepcopy
 from collections import defaultdict
 import time
 import pickle
 import subprocess
 import inspect
-import sys
 import os
 import uuid
 from pprint import pformat
 import __main__
 import resource
 
-import numpy as np
 import pandas as pd
 
 import torch
-import torch.nn as nn
-
-import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.nn.parallel import DataParallel, DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
@@ -27,7 +21,6 @@ from torch.nn import SyncBatchNorm
 from torch.utils.data.sampler import Sampler
 
 from .utils import get_device, seed_everything, get_gpu_memory
-from .tb_logger import DummyTensorBoardLogger
 from .callbacks import (
     TorchLogger, DummyLogger, SaveSnapshot
 )
@@ -75,7 +68,6 @@ class TorchTrainer:
         # DDP
         self.ddp_sync_batch_norm = SyncBatchNorm.convert_sync_batchnorm
         self.ddp_average_loss = True
-        self.ddp_sync_last = False # deprecated
         self.ddp_params = dict(
             broadcast_buffers=True, 
             static_graph=True,
@@ -298,14 +290,15 @@ class TorchTrainer:
             # logging
             learning_rate = [param_group['lr']
                              for param_group in self.optimizer.param_groups]
-            logs = [
-                ('batch_train_loss', loss_batch),
-                ('batch_train_lr', learning_rate)
-            ]
+            logs = {
+                'batch_train_loss': loss_batch,
+                'batch_train_lr': learning_rate[0]
+            }
             if len(self.epoch_storage['batch_metric']) > 0:
                 metric = self.epoch_storage['batch_metric'][-1]
-                logs.append(('batch_valid_mertric', metric))
-            self.tb_logger.list_of_scalars_summary(logs, batches_done)
+                logs['batch_valid_metric'] = metric
+            if self.rank == 0:
+                self.logger.write_log(logs, batches_done, log_wandb=False)
             self.epoch_storage['loss'].append(loss_batch)
 
             train_time += time.time() - curr_time
@@ -344,12 +337,6 @@ class TorchTrainer:
         if metric_total is None:
             metric_total = loss_total
 
-        # logging
-        logs = [
-            ('epoch_train_loss', loss_total),
-            ('epoch_train_metric', metric_total),
-        ]
-        self.tb_logger.list_of_scalars_summary(logs, self.global_epoch)
         return loss_total, metric_total, monitor_metrics_total
 
     def _valid_one_epoch(self, loader):
@@ -387,13 +374,14 @@ class TorchTrainer:
                 else:  # Use loss on device: 0
                     loss_batch = loss.item()
 
-                logs = [
-                    ('batch_valid_loss', loss_batch),
-                ]
+                logs = {
+                    'batch_valid_loss': loss_batch
+                }
                 if len(self.epoch_storage['batch_metric']) > 0:
                     metric = self.epoch_storage['batch_metric'][-1]
-                    logs.append(('batch_valid_mertric', metric))
-                self.tb_logger.list_of_scalars_summary(logs, batches_done)
+                    logs['batch_valid_metric'] = metric
+                if self.rank == 0:
+                    self.logger.write_log(logs, batches_done, log_wandb=False)
                 self.epoch_storage['loss'].append(loss_batch)
 
         for key, val in self.epoch_storage.items():
@@ -424,11 +412,6 @@ class TorchTrainer:
         if metric_total is None:
             metric_total = loss_total
 
-        logs = [
-            ('epoch_valid_loss', loss_total),
-            ('epoch_valid_metric', metric_total),
-        ]
-        self.tb_logger.list_of_scalars_summary(logs, self.global_epoch)
         return loss_total, metric_total, monitor_metrics_total
 
     def _train(self, loader, loader_valid, num_epochs):
@@ -436,6 +419,9 @@ class TorchTrainer:
         assert self._model_ready
         if self.rank == 0 and hasattr(self.logger, 'use_wandb') and self.logger.use_wandb:
             self.logger.init_wandb()
+        if self.rank == 0 and hasattr(self.logger, 'use_tensorboard') and self.logger.use_tensorboard:
+            self.logger.init_tensorboard(serial=self.serial)
+        
         for epoch in range(num_epochs):
             if self.parallel == 'ddp' and not self.xla:
                 loader.sampler.set_epoch(epoch)
@@ -595,11 +581,11 @@ class TorchTrainer:
               # Snapshot
               export_dir=None, resume=False,
               # Training option
-              fp16=False, parallel=None, grad_accumulations=1, 
-              deterministic=None, random_state=0, 
-              clip_grad=None, max_grad_norm=10000, 
+              fp16=False, parallel=None, grad_accumulations=1,
+              deterministic=None, random_state=0,
+              clip_grad=None, max_grad_norm=10000,
               # Logging
-              logger=None, tb_logger=None, progress_bar=False, 
+              logger=None, progress_bar=False,
               ):
         # Register params
         self.criterion = criterion
@@ -615,7 +601,6 @@ class TorchTrainer:
         self.eval_metric = eval_metric
         self.monitor_metrics = monitor_metrics
         self.logger = logger
-        self.tb_logger = tb_logger
         self.fp16 = fp16
         self.parallel = parallel
         self.progress_bar = progress_bar
@@ -651,9 +636,6 @@ class TorchTrainer:
             pass
         else:
             raise ValueError('Invalid type of logger.')
-
-        if self.tb_logger is None:
-            self.tb_logger = DummyTensorBoardLogger()
 
         ''' Configure loss function and metrics '''
         if eval_metric is None:

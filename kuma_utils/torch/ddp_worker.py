@@ -10,8 +10,7 @@ multiprocessing.current_process().authkey = '0'.encode('utf-8')
 
 class CustomUnpickler(pickle.Unpickler):
     '''
-    With this unpickler, 
-    you can unpickle objects defined in your origin __main__
+    Unpickle objects defined in your origin __main__
     '''
     def __init__(self, f, main):
         super().__init__(f)
@@ -29,8 +28,8 @@ def ddp_worker(path, rank, origin):
     origin = Path(origin)
     main_file = origin.stem
     main_dir = origin.parent
-    sys.path = sys.path[1:] # prevent internal import in kuma_utils
-    sys.path.append(str(main_dir)) # add origin directory 
+    sys.path = sys.path[1:]  # prevent internal import in kuma_utils
+    sys.path.append(str(main_dir))  # add origin directory
 
     with open(path, 'rb') as f:
         unpickler = CustomUnpickler(f, main=main_file)
@@ -53,7 +52,7 @@ if __name__ == "__main__":
     local_rank = int(os.environ["LOCAL_RANK"])
     try:
         ddp_worker(opt.path, local_rank, opt.origin)
-    except Exception as e:
+    except:
         print(traceback.format_exc())
         if Path(opt.path).exists():
             Path(opt.path).unlink()

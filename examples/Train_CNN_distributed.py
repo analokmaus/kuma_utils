@@ -93,11 +93,14 @@ for fold, (train_idx, valid_idx) in enumerate(
         log_items='epoch train_loss train_metric valid_loss valid_metric learning_rate early_stop', 
         file=True,
         use_wandb=True, wandb_params={
-            'project': 'kuma_utils_demo', 
+            'project': 'kuma_utils_demo',
             'group': 'demo_cross_validation_ddp',
             'name': f'fold{fold}',
             'config': asdict(cfg),
-        })
+        },
+        use_tensorboard=True,
+        tensorboard_dir=export_dir/'tensorboard',
+    )
     
     trn = TorchTrainer(model, serial=f'fold{fold}')
     trn.train(
@@ -110,22 +113,22 @@ for fold, (train_idx, valid_idx) in enumerate(
         ],
         optimizer=optimizer,
         scheduler=scheduler,
-        scheduler_target='valid_loss', # ReduceLROnPlateau reads metric each epoch
+        scheduler_target='valid_loss',  # ReduceLROnPlateau reads metric each epoch
         num_epochs=cfg.num_epochs,
         hook=SimpleHook(evaluate_in_batch=False),
         callbacks=[
             EarlyStopping(
-                patience=cfg.early_stopping_rounds, 
-                target='valid_metric', 
+                patience=cfg.early_stopping_rounds,
+                target='valid_metric',
                 maximize=True),
             SaveSnapshot() # Default snapshot path: {export_dir}/{serial}.pt
         ],
-        logger=logger, 
+        logger=logger,
         export_dir=export_dir,
-        parallel='ddp', # Supported parallel methods: 'dp', 'ddp'
-        fp16=True, # Pytorch mixed precision
-        deterministic=True, 
-        random_state=0, 
+        parallel='ddp',  # Supported parallel methods: 'dp', 'ddp'
+        fp16=True,  # Pytorch mixed precision
+        deterministic=True,
+        random_state=0,
         progress_bar=True # Progress bar shows batches done
     )
 

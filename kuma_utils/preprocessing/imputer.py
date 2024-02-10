@@ -6,7 +6,7 @@ from .base import PreprocessingTemplate
 from .utils import analyze_column
 
 
-class LGBMImputer():
+class LGBMImputer(PreprocessingTemplate):
     '''
     Regression imputer using LightGBM
     '''

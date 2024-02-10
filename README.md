@@ -12,22 +12,35 @@
 ```
 
 # Overview
+Using this library, you can:
+
+- Simplify the structuring of table data and feature engineering
+- implify the training and hyperparameter search for ML tools with Sklearn API (including sklearn, lightgbm, catboost, etc.)
+- Simplify the training of Pytorch models (including the use of amp and parallelization across multiple GPUs)
+- Customize training with our own Hook/Callback interface (such as Earlystop, logging functions integrated with wandb, etc.)
+- Automated exploratory data analysis
+
 ## What's new
 - Wandb integration
 - Upgrade to newer backend libraries
+- Integration of TensorboardLogger into TorchLogger
+- Automated hyperparameter tuning for lightgbm/xgboost.cv()
 
 ## Work in progress
 - Multi-node DDP
 
-# Environment
-## Setup with Poetry
+# Setup
+## With Poetry
 ```
 git clone https://github.com/analokmaus/kuma_utils.git
 cd kuma_utils
 poetry install
 ```
 
-# Tutorial
+## Alternative installation methods
+WIP
+
+# Tutorials
 - [Exploratory data analysis](examples/Exploratory_data_analysis.ipynb)
 - [Data preprocessing](examples/Data_preprocessing.ipynb)
 - [Train and validate scikit-learn API models](examples/Train_and_validate_models.ipynb)
@@ -77,9 +90,9 @@ poetry install
     ┃   ┣ etc...
     ┃ 
     ┣ TorchTrainer              - PyTorch Trainer.
-    ┣ EarlyStopping             - Early stopping callback for TorchTrainer.
+    ┣ EarlyStopping             - Early stopping callback for TorchTrainer. Save snapshot when best score is achieved.
     ┣ SaveEveryEpoch            - Save snapshot at the end of every epoch.
-    ┣ SaveSnapshot              - Checkpoint callback.
+    ┣ SaveSnapshot              - Snapshot callback.
     ┣ SaveAverageSnapshot       - Moving average snapshot callback.
     ┣ TorchLogger               - Logger
     ┣ TensorBoardLogger         - TensorBoard Logger

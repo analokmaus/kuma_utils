@@ -25,10 +25,11 @@ def explore_data(
         test_df: pd.DataFrame = None,
         exclude_columns: List[str] = [],
         normalize: bool = True,
+        histogram_n_bins: int = 20,
         use_wandb: bool = False,
         wandb_params: dict = {},
         plot: bool = True,
-        scale: Union[int, float] = 1.0,
+        scale_plot: Union[int, float] = 1.0,
         save_to: Union[str, Path] = None,
         verbose: bool = True,
     ) -> None:
@@ -58,7 +59,9 @@ def explore_data(
         print(f'Included columns: \n{pformat(include_columns, compact=True)} ({n_columns})\n')
     if plot:
         fig_length = int(np.ceil(np.sqrt(n_columns)))
-        fig = plt.figure(figsize=(fig_length*6*scale, fig_length*3*scale), tight_layout=True)
+        fig = plt.figure(
+            figsize=(fig_length*6*scale_plot, fig_length*3*scale_plot),
+            tight_layout=True)
     
     ''' Check columns '''
     for icol, col in enumerate(include_columns):
@@ -74,6 +77,10 @@ def explore_data(
             if test_df is not None:
                 test_nan_count = test_vals.isnull().sum()
                 print(f' test NaN: {test_nan_count} ({test_nan_count/len(test_vals):.3f}\n')
+                bin_edges = np.histogram_bin_edges(
+                    np.concatenate([vals.values, test_vals.values]), bins=histogram_n_bins)
+            else:
+                bin_edges = np.histogram_bin_edges(vals.values, bins=histogram_n_bins)
             
             if plot or use_wandb:
                 if plot:
@@ -81,10 +88,10 @@ def explore_data(
                 elif use_wandb:
                     fig, ax1 = plt.subplots()
 
-                sns.histplot(vals.dropna(), ax=ax1, label='train', 
+                sns.histplot(vals.dropna(), ax=ax1, label='train', bins=bin_edges,
                              element="step", stat="density", common_norm=False, kde=True)
                 if test_df is not None:
-                    sns.histplot(test_vals.dropna(), ax=ax1, label='test',
+                    sns.histplot(test_vals.dropna(), ax=ax1, label='test', bins=bin_edges,
                                  element="step", stat="density", common_norm=False, kde=True)
                 plt.legend()
           

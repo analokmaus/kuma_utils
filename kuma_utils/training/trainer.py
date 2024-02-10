@@ -2,30 +2,28 @@ import numpy as np
 import pandas as pd
 import pickle
 from pathlib import Path
+from copy import deepcopy
 import optuna
+import optuna.integration.lightgbm as lgb_tune
 optuna.logging.set_verbosity(optuna.logging.FATAL)
-
-import catboost as cat
+import matplotlib.pyplot as plt
+import matplotlib.cm as colormap
+import seaborn as sns
 from catboost import Pool as CatPool
 import lightgbm as lgb
 import xgboost as xgb
 from sklearn.calibration import calibration_curve, CalibratedClassifierCV
 from sklearn.inspection import permutation_importance
 from sklearn.model_selection import KFold
-from copy import deepcopy
 
-import matplotlib.pyplot as plt
-import matplotlib.cm as colormap
-import seaborn as sns
 try:
     import japanize_matplotlib
 except ModuleNotFoundError:
     pass
 
-from .utils import booster2sklearn, ModelExtractor, auc_metric, mse_metric
+from .utils import booster2sklearn, ModelExtractor, XGBModelExtractor, auc_metric, mse_metric
 from .logger import LGBMLogger
 from .optuna import PARAMS_ZOO
-from .optuna import lightgbm as lgb_tune
 from kuma_utils.utils import vector_normalize
 
 
@@ -69,22 +67,22 @@ DIRECTION = {
 
 class Trainer:
     '''
-    Amazing wrapper for sklearn like models
+    Wrapper for sklearn API models
 
-    Some useful features:
+    Features:
     - Perform cross validation during training process (only for GBDT)
     - Get various kinds of feature importance
     - Plot calibration curve
     - Automated parameter tuning using Optuna
     - Export training log
     - Save and load your model
-
-    TODO:
-    - Built-in probality calibration
-    - Fix logging issues with optuna
     '''
     def __init__(self, model=None, path=None, serial='trainer0'):
         self.serial = serial
+        self.snapshot_items = [
+            'serial', 'model', 'model_name', 'is_trained', 'best_iteration', 'best_score',
+            'evals_result', 'feature_names', 'n_features', 'n_classes'
+        ]
         if model is not None:
             self.model_type = model
             self.model_name = type(self.model_type()).__name__
@@ -100,11 +98,7 @@ class Trainer:
             self.load(path)
         else:
             raise ValueError('either model or path must be given.')
-        self.snapshot_items = [
-            'serial', 'model', 'model_name', 'is_trained', 'best_iteration', 'best_score',
-            'evals_result', 'feature_names', 'n_features', 'n_classes'
-        ]
-
+        
     def _data_check(self, data):
         assert isinstance(data, (list, tuple))
         assert len(data) in [0, 2, 3]
@@ -142,7 +136,6 @@ class Trainer:
               # Optuna
               tune_model=False, optuna_params=None, maximize=None, 
               eval_metric=None, n_trials=None, timeout=None, 
-              lgbm_n_trials=[7, 20, 10, 6, 20], 
               # Misc
               logger=None, n_jobs=-1):
 
@@ -168,9 +161,9 @@ class Trainer:
         if self.model_name in MODEL_ZOO['cat']:
             ''' Catboost '''
             dtrain = CatPool(
-                data=train_data[0], 
-                label=train_data[1], 
-                weight=train_data[2] if len(train_data) == 3 else None, 
+                data=train_data[0],
+                label=train_data[1],
+                weight=train_data[2] if len(train_data) == 3 else None,
                 cat_features=cat_features,
                 thread_count=n_jobs)
             if len(valid_data) > 0:
@@ -212,12 +205,12 @@ class Trainer:
                         self.best_iteration = self.model.get_best_iteration()
                         self.evals_result = self.model.get_evals_result()
                     
-                    if maximize == True and self.best_score < score:
+                    if maximize and self.best_score < score:
                         self.best_model = self.model.copy()
                         self.best_score = score
                         self.best_iteration = self.model.get_best_iteration()
                         self.evals_result = self.model.get_evals_result()
-                    elif maximize == False and self.best_score > score:
+                    elif not maximize and self.best_score > score:
                         self.best_model = self.model.copy()
                         self.best_score = score
                         self.best_iteration = self.model.get_best_iteration()
@@ -227,7 +220,7 @@ class Trainer:
                 
                 study = optuna.create_study(direction='maximize' if maximize else 'minimize')
                 study.optimize(
-                    cat_objective, n_trials=n_trials, timeout=timeout, 
+                    cat_objective, n_trials=n_trials, timeout=timeout,
                     callbacks=[logger.optuna], n_jobs=1)
                 self.model = self.best_model.copy()
                 del self.best_model
@@ -258,16 +251,21 @@ class Trainer:
 
             # Optuna intergration
             if tune_model:
-                raise NotImplementedError('Parameter tuning for lightgbm is currently work in process.')
-                # _fit_params = fit_params.copy()
-                # _params = params.copy()
-                # if 'verbose_eval' in _fit_params.keys():
-                #     _fit_params.update({'verbose_eval': False})
-                # _params.update({'metric':main_metric})
-                # tuner = lgb_tune.LightGBMTuner(
-                #     _params, train_set=dtrain, valid_sets=[dtrain, dvalid],
-                #     n_trials_config=lgbm_n_trials, show_progress_bar=False, 
-                #     optuna_callbacks=[logger.optuna], **_fit_params)
+                _fit_params = fit_params.copy()
+                _params = params.copy()
+                _params.update({'metric': main_metric})
+                study = optuna.create_study(direction='maximize' if maximize else 'minimize')
+                res = {}
+                tuner = lgb_tune.LightGBMTuner(
+                    _params, 
+                    train_set=dtrain, valid_sets=[dtrain, dvalid], 
+                    valid_names='valid_1', verbosity=0,
+                    study=study, time_budget=timeout, show_progress_bar=False,
+                    optuna_callbacks=[logger.optuna], **deepcopy(_fit_params))
+                tuner.run()
+                self.model = tuner.get_best_booster()
+                self.best_score = tuner.best_score
+                del tuner
             else:
                 _params = params.copy()
                 
@@ -481,21 +479,19 @@ class Trainer:
 
             # Optuna intergration
             if tune_model:
-                raise NotImplementedError('Model tuning for lightgbm cv is currently work in progress.')
-                # _fit_params = fit_params.copy()
-                # _params = params.copy()
-                # _params.update({'metric': main_metric})
-                # if 'verbose_eval' in _fit_params.keys():
-                #     _fit_params.update({'verbose_eval': False})
-                # tuner = lgb_tune.LightGBMTunerCV(
-                #     _params, dtrain, folds=folds, n_trials_config=lgbm_n_trials, 
-                #     return_cvbooster=True, optuna_callbacks=[logger.optuna], 
-                #     show_progress_bar=False, **_fit_params)
-                # tuner.run()
-                # self.model = tuner.get_best_booster().boosters
-                # self.best_iteration = tuner.get_best_booster().best_iteration
-                # self.best_score = tuner.best_score
-                # del tuner
+                _fit_params = fit_params.copy()
+                _params = params.copy()
+                _params.update({'metric': main_metric})
+                study = optuna.create_study(direction='maximize' if maximize else 'minimize')
+                tuner = lgb_tune.LightGBMTunerCV(
+                    _params, dtrain, folds=folds, time_budget=timeout,
+                    study=study, return_cvbooster=True, optuna_callbacks=[logger.optuna],
+                    show_progress_bar=False, **deepcopy(_fit_params))
+                tuner.run()
+                self.model = tuner.get_best_booster().boosters
+                self.best_iteration = tuner.get_best_booster().best_iteration
+                self.best_score = tuner.best_score
+                del tuner
             else:
                 _params = params.copy()
                 model_extractor = ModelExtractor()
@@ -539,6 +535,7 @@ class Trainer:
                 _fit_params = fit_params.copy()
                 if 'verbose_eval' in _fit_params.keys():
                     _fit_params.update({'verbose_eval': False})
+                
                 self.best_score = None
                 self.best_model = None
                 self.best_iteration = 0
@@ -550,11 +547,12 @@ class Trainer:
                     else:
                         _params = optuna_params(trial, _params)
                     
-                    model_extractor = ModelExtractor()
+                    models = []
+                    model_extractor = XGBModelExtractor(models)
                     res = xgb.cv(
                         _params, dtrain=dtrain, folds=folds, maximize=maximize,
                         callbacks=[model_extractor], **_fit_params)
-                    self.model = model_extractor.get_model()
+                    self.model = models
 
                     if eval_metric is None:
                         if maximize:

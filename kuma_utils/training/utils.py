@@ -97,3 +97,12 @@ class ModelExtractor:
 
     def get_best_iteration(self):
         return self.model.best_iteration
+
+
+class XGBModelExtractor(xgb.callback.TrainingCallback):
+    def __init__(self, cvboosters):
+        self._cvboosters = cvboosters
+    
+    def after_training(self, model):
+        self._cvboosters[:] = [cvpack.bst for cvpack in model.cvfolds]
+        return model
