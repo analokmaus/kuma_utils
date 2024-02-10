@@ -29,6 +29,10 @@ class CrossValidator:
     '''
     def __init__(self, model=None, path=None, serial='cv0'):
         self.serial = serial
+        self.snapshot_items = [
+            'serial', 'models', 'is_trained',
+            'fold_indices', 'scores', 'best_score', 'outoffold'
+        ]
         if model is not None:
             self.model = model
             self.models = []
@@ -43,10 +47,6 @@ class CrossValidator:
             self.load(path)
         else:
             raise ValueError('either model or path must be given.')
-        self.snapshot_items = [
-            'serial', 'models', 'is_trained',
-            'fold_indices', 'scores', 'best_score', 'outoffold'
-        ]
 
     def _data_check(self, data):
         assert isinstance(data, (list, tuple))
