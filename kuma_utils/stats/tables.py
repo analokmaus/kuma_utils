@@ -71,8 +71,6 @@ def make_demographic_table(
         vals_g2 = vals_all[g2_index]
         for enc_val, _ in enumerate(_le.classes_):
             dec_val = _le.inverse_transform([enc_val])[0]
-            if enc_val == 0:
-                continue
             pos_g1 = (vals_g1 == enc_val).sum()
             pos_g2 = (vals_g2 == enc_val).sum()
             pval = scipy.stats.chi2_contingency([
@@ -171,8 +169,6 @@ def make_summary_table(
         vals_all = _le.transform(col_arr)
         for enc_val, _ in enumerate(_le.classes_):
             dec_val = _le.inverse_transform([enc_val])[0]
-            if enc_val == 0:
-                continue
             pos_all = (vals_all == enc_val).sum()
             res.append({
                 '_item': f'{col}={dec_val}, n(%)',
