@@ -30,7 +30,7 @@ class Accuracy(MetricTemplate):
         super().__init__(maximize=True)
 
     def _test(self, target, approx):
-        assert(len(target) == len(approx))
+        assert len(target) == len(approx)
         target = np.asarray(target, dtype=int)
         approx = np.asarray(approx, dtype=float)
         if len(approx.shape) == 1:
@@ -97,7 +97,7 @@ class QuandricWeightKappa(MetricTemplate):
         self.max_rat = max_rat
 
     def _test(self, target, approx):
-        assert(len(target) == len(approx))
+        assert len(target) == len(approx)
         target = np.asarray(target, dtype=int)
         approx = np.asarray(approx, dtype=float)
         if len(approx.shape) == 1:

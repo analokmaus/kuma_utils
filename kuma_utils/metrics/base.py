@@ -51,7 +51,7 @@ class MetricTemplate:
         target = data.get_label()
         return self.__class__.__name__, self._test(target, approx), self.maximize
 
-    lgbm = lgb # for compatibility
+    lgbm = lgb  # for compatibility
 
     ''' XGBoost '''
     def xgb(self, approx, dtrain):

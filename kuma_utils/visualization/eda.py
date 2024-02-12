@@ -8,6 +8,7 @@ from matplotlib_venn import venn2
 import seaborn as sns
 
 from kuma_utils.preprocessing import analyze_column
+from kuma_utils.stats import make_demographic_table, make_summary_table
 
 try:
     import japanize_matplotlib
@@ -52,8 +53,13 @@ def explore_data(
         test_columns = test_df.columns.tolist()
         include_columns = set(train_columns) & set(test_columns)
         include_columns = list(include_columns - set(exclude_columns))
+        concat_df = pd.concat([
+            train_df[include_columns].assign(_group='train'), 
+            test_df[include_columns].assign(_group='test')], axis=0)
     else:
         include_columns = list(set(train_columns) - set(exclude_columns))
+        concat_df = train_df[include_columns]
+
     n_columns = len(include_columns)
     if verbose:
         print(f'Included columns: \n{pformat(include_columns, compact=True)} ({n_columns})\n')
@@ -79,8 +85,16 @@ def explore_data(
                 print(f' test NaN: {test_nan_count} ({test_nan_count/len(test_vals):.3f}\n')
                 bin_edges = np.histogram_bin_edges(
                     np.concatenate([vals.values, test_vals.values]), bins=histogram_n_bins)
+                summary = make_demographic_table(concat_df, group_col='_group', display_cols=[col]).drop(
+                    ['_ks_stat', '_nan_info'], axis=1).iloc[1:]
             else:
                 bin_edges = np.histogram_bin_edges(vals.values, bins=histogram_n_bins)
+                summary = make_summary_table(concat_df, display_cols=[col]).drop(
+                    ['_nan_info'], axis=1).iloc[1:]
+
+            print(summary)
+            if use_wandb:
+                wandb.log({f"{col}/summary": wandb.Table(dataframe=summary)})
             
             if plot or use_wandb:
                 if plot:
@@ -100,30 +114,16 @@ def explore_data(
                     plt.close()
 
         elif column_type == 'categorical':
-            val_cnt = vals.value_counts(dropna=False)
             if test_df is not None:
-                val_cnt = pd.concat(
-                    [val_cnt, test_vals.value_counts(dropna=False)], 
-                    axis=1).fillna(0)
-                val_cnt.columns = ['train', 'test']
-                if normalize:
-                    val_cnt['train'] = val_cnt['train'] / val_cnt['train'].sum()
-                    val_cnt['test'] = val_cnt['test'] / val_cnt['test'].sum()
-                else:
-                    val_cnt = val_cnt.astype(int)
+                summary = make_demographic_table(concat_df, group_col='_group', display_cols=[col]).drop(
+                    ['_ks_stat', '_nan_info'], axis=1).iloc[1:]
             else:
-                val_cnt = pd.DataFrame(val_cnt)
-                val_cnt.columns = ['train']
-                if normalize:
-                    val_cnt['train'] = val_cnt['train'] / val_cnt['train'].sum()
-                else:
-                    val_cnt = val_cnt.astype(int)
-            
-            if use_wandb:
-                wandb.log({f"{col}/count": wandb.Table(dataframe=val_cnt.reset_index())})
+                summary = make_summary_table(concat_df, display_cols=[col]).drop(
+                    ['_nan_info'], axis=1).iloc[1:]
 
-            print(f'\n n_classes={len(val_cnt)}')
-            print(f'{val_cnt}\n')
+            print(summary)
+            if use_wandb:
+                wandb.log({f"{col}/summary": wandb.Table(dataframe=summary)})
 
             if plot or use_wandb:
                 if plot:

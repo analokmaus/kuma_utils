@@ -19,6 +19,7 @@ Using this library, you can:
 - Simplify the training of Pytorch models (including the use of amp and parallelization across multiple GPUs)
 - Customize training with our own Hook/Callback interface (such as Earlystop, logging functions integrated with wandb, etc.)
 - Automated exploratory data analysis
+- Convenient functions for basic biostatistical analysis.
 
 ## What's new
 - Wandb integration
@@ -46,6 +47,7 @@ WIP
 - [Train and validate scikit-learn API models](examples/Train_and_validate_models.ipynb)
 - [Train pytorch models on single GPU](examples/Train_CNN_model.ipynb)
 - [Train pytorch models on multiple GPU](examples/Train_CNN_distributed.py)
+- [Statistical analysis (propensity score matching)](examples/Statistical_analysis.ipynb)
 
 # Directory
 ```
@@ -53,20 +55,28 @@ WIP
 ┃   ┣ explore_data              - Simple exploratory data analysis.
 ┃
 ┣ preprocessing
+┃   ┣ SelectNumerical            
+┃   ┣ SelectCategorical 
+┃   ┣ DummyVariable 
 ┃   ┣ DistTransformer           - Distribution transformer for numerical features. 
 ┃   ┣ LGBMImputer               - Regression imputer for missing values using LightGBM.
 ┃
+┣ stats
+┃   ┣ make_demographic_table    - Automated demographic table generator.
+┃   ┣ PropensityScoreMatching   - Fast and capable of using all sklearn API models as a backend.
+┃
 ┣ training
-┃   ┣ Trainer                   - Amazing wrapper for scikit-learn API models.
-┃   ┣ CrossValidator            - Amazing cross validation wrapper.
+┃   ┣ Trainer                   - Wrapper for scikit-learn API models.
+┃   ┣ CrossValidator            - Ccross validation wrapper.
 ┃   ┣ LGBMLogger                - Logger callback for LightGBM/XGBoost/Optuna.
 ┃   ┣ StratifiedGroupKFold      - Stratified group k-fold split.
 ┃   ┣ optuna                    - optuna modifications.
-┃       ┣ lightgbm               - Optune lightgbm integration with modifiable n_trials.
 ┃
 ┣ metrics                       - Universal metrics
 ┃   ┣ SensitivityAtFixedSpecificity
 ┃   ┣ RMSE
+┃   ┣ Pearson correlation coefficient
+┃   ┣ R2 score
 ┃   ┣ AUC
 ┃   ┣ Accuracy
 ┃   ┣ QuandricWeightKappa
