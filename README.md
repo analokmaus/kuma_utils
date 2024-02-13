@@ -31,11 +31,21 @@ Using this library, you can:
 - Multi-node DDP
 
 # Setup
-## With Poetry
+## With pip
+```bash
+pip install git+https://github.com/analokmaus/kuma_utils.git@v0.3.2  # Stable
+pip install git+https://github.com/analokmaus/kuma_utils.git@master  # Latest
 ```
+
+## With poetry
+```bash
 git clone https://github.com/analokmaus/kuma_utils.git
 cd kuma_utils
 poetry install
+```
+or simply,
+```bash
+poetry add git+https://github.com/analokmaus/kuma_utils.git@v0.3.2  # Stable
 ```
 
 ## Alternative installation methods
