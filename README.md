@@ -25,7 +25,7 @@ Using this library, you can:
 - Wandb integration
 - Upgrade to newer backend libraries
 - Integration of TensorboardLogger into TorchLogger
-- Automated hyperparameter tuning for lightgbm/xgboost.cv()
+- Automated hyperparameter tuning for lightgbm/xgboost/catboost.cv()
 
 ## Work in progress
 - Multi-node DDP

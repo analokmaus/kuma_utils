@@ -9,6 +9,7 @@ optuna.logging.set_verbosity(optuna.logging.FATAL)
 import matplotlib.pyplot as plt
 import matplotlib.cm as colormap
 import seaborn as sns
+import catboost as cat
 from catboost import Pool as CatPool
 import lightgbm as lgb
 import xgboost as xgb
@@ -119,23 +120,23 @@ class Trainer:
                     main_metric = params[key]
                 else:
                     main_metric = params[key].__class__.__name__
-                if not main_metric in DIRECTION['maximize'] + DIRECTION['minimize']:
+                if main_metric not in (DIRECTION['maximize'] + DIRECTION['minimize']):
                     print(f'specify optimization direction for metric {main_metric}.')
                 _maximize = main_metric in DIRECTION['maximize']
                 return main_metric, _maximize
         else:
             return None, maximize
 
-    def train(self, 
+    def train(self,
               # Dataset
-              train_data, valid_data=(), cat_features=None, 
+              train_data, valid_data=(), cat_features=None,
               # Model
-              params={}, fit_params={}, convert_to_sklearn=True, 
+              params={}, fit_params={}, convert_to_sklearn=True,
               # Probability calibration
               calibration=False, calibration_method='isotonic', calibration_cv=5,
               # Optuna
-              tune_model=False, optuna_params=None, maximize=None, 
-              eval_metric=None, n_trials=None, timeout=None, 
+              tune_model=False, optuna_params=None, maximize=None,
+              eval_metric=None, n_trials=None, timeout=None,
               # Misc
               logger=None, n_jobs=-1):
 
@@ -179,8 +180,6 @@ class Trainer:
             # Optuna integration
             if tune_model:
                 _fit_params = fit_params.copy()
-                if 'verbose_eval' in _fit_params.keys():
-                    _fit_params.update({'verbose_eval': False})
                 self.best_score = None
                 self.best_model = None
 
@@ -190,10 +189,18 @@ class Trainer:
                         _params = PARAMS_ZOO[self.model_name](trial, _params)
                     else:
                         _params = optuna_params(trial, _params)
-                    
-                    self.model = self.model_type(**_params)
-                    self.model.fit(X=dtrain, eval_set=dvalid, **_fit_params)
 
+                    self.model = self.model_type(**_params)
+                    if 'task_type' in _params.keys() and _params['task_type'] == 'GPU':
+                        self.model.fit(X=dtrain, eval_set=dvalid, **_fit_params)
+                    else:
+                        pruning_callback = optuna.integration.CatBoostPruningCallback(trial, main_metric)
+                        cat_callbacks = [pruning_callback]
+                        if 'callbacks' in _fit_params.keys():
+                            cat_callbacks += _fit_params['callbacks']
+                            _fit_params.pop('callbacks')
+                        self.model.fit(X=dtrain, eval_set=dvalid, callbacks=cat_callbacks, **_fit_params)
+                    
                     if eval_metric is None:
                         score = self.model.get_best_score()['validation'][main_metric]
                     else:
@@ -308,8 +315,6 @@ class Trainer:
             # Optuna integration
             if tune_model:
                 _fit_params = fit_params.copy()
-                if 'verbose_eval' in _fit_params.keys():
-                    _fit_params.update({'verbose_eval': False})
                 self.best_score = None
                 self.best_model = None
 
@@ -323,10 +328,14 @@ class Trainer:
                     res = {}
                     pruning_callback = optuna.integration.XGBoostPruningCallback(
                         trial, f'valid-{main_metric}')
+                    xgb_callbacks = [pruning_callback]
+                    if 'callbacks' in _fit_params.keys():
+                        xgb_callbacks += _fit_params['callbacks']
+                        _fit_params.pop('callbacks')
                     self.model = xgb.train(
                         _params, dtrain=dtrain,
                         evals=[(dtrain, 'train'), (dvalid, 'valid')],
-                        evals_result=res, callbacks=[pruning_callback], **_fit_params)
+                        evals_result=res, callbacks=xgb_callbacks, **_fit_params)
 
                     if eval_metric is None:
                         if maximize:
@@ -363,8 +372,8 @@ class Trainer:
                 
                 res = {}
                 self.model = xgb.train(
-                    _params, dtrain=dtrain, evals=[(dtrain, 'train'), (dvalid, 'valid')], 
-                    callbacks=[logger.lgbm], evals_result=res, **fit_params)
+                    _params, dtrain=dtrain, evals=[(dtrain, 'train'), (dvalid, 'valid')],
+                    evals_result=res, **fit_params)
                 if maximize:
                     self.best_score = np.max(res['valid'][main_metric])
                 else:
@@ -444,7 +453,6 @@ class Trainer:
            # Optuna
            tune_model=False, optuna_params=None, maximize=None,
            eval_metric=None, n_trials=None, timeout=None,
-           lgbm_n_trials=[7, 20, 10, 6, 20],
            # Misc
            logger=None, n_jobs=-1):
         
@@ -467,7 +475,83 @@ class Trainer:
         assert isinstance(logger, LGBMLogger)
 
         if self.model_name in MODEL_ZOO['cat']:
-            raise NotImplementedError('catboost is incompatible with .cv().')
+            ''' CatBoost '''
+            dtrain = CatPool(
+                data=data[0],
+                label=data[1],
+                weight=data[2] if len(data) == 3 else None,
+                cat_features=cat_features,
+                thread_count=n_jobs)
+            
+            if tune_model:
+                _fit_params = fit_params.copy()
+                self.best_score = None
+                self.best_model = None
+
+                def cat_objective(trial):
+                    _params = params.copy()
+                    if optuna_params is None:
+                        _params = PARAMS_ZOO[self.model_name](trial, _params)
+                    else:
+                        _params = optuna_params(trial, _params)
+
+                    res, models = cat.cv(
+                        pool=dtrain, params=_params, folds=folds, return_models=True, as_pandas=True,
+                        **_fit_params)
+                    
+                    if eval_metric is None:
+                        if maximize:
+                            score = np.max(res[f'test-{main_metric}-mean'])
+                            best_iteration = np.argmax(res[f'test-{main_metric}-mean'])
+                        else:
+                            score = np.min(res[f'test-{main_metric}-mean'])
+                            best_iteration = np.argmin(res[f'test-{main_metric}-mean'])
+                    else:
+                        raise NotImplementedError('Do not use custom eval_metric for .cv() :(')
+
+                    if self.best_score is None:
+                        self.best_score = score
+                        self.best_model = models.copy()
+                        self.evals_result = res
+
+                    if maximize and self.best_score < score:
+                        self.best_score = score
+                        self.best_model = models.copy()
+                        self.best_iteration = best_iteration
+                        self.evals_result = res
+                    elif not maximize and self.best_score > score:
+                        self.best_score = score
+                        self.best_model = models.copy()
+                        self.best_iteration = best_iteration
+                        self.evals_result = res
+             
+                    return score
+        
+                study = optuna.create_study(
+                    direction='maximize' if maximize else 'minimize')
+                study.optimize(
+                    cat_objective, n_trials=n_trials, timeout=timeout,
+                    callbacks=[logger.optuna], n_jobs=1)
+                self.model = self.best_model.copy()
+                del self.best_model
+
+            else:
+                _params = params.copy()
+                res, models = cat.cv(
+                    pool=dtrain, params=_params, folds=folds, return_models=True, as_pandas=True, **fit_params)
+                if self.model_name == 'CatBoostClassifier':
+                    self.model = [cat.to_classifier(m) for m in models]
+                elif self.model_name == 'CatBoostRegressor':
+                    self.model = [cat.to_regressor(m) for m in models]
+                if maximize:
+                    self.best_score = np.max(res[f'test-{main_metric}-mean'])
+                    self.best_iteration = np.argmax(res[f'test-{main_metric}-mean'])
+                else:
+                    self.best_score = np.min(res[f'test-{main_metric}-mean'])
+                    self.best_iteration = np.argmin(res[f'test-{main_metric}-mean'])
+                self.evals_result = res
+
+            logger(f'[{self.best_iteration}]\tbest score is {self.best_score:.6f}')
 
         elif self.model_name in MODEL_ZOO['lgb']:
             ''' LightGBM '''
@@ -502,8 +586,8 @@ class Trainer:
                     lgb_callbacks += fit_params['callbacks']
                     del fit_params['callbacks']
                 res = lgb.cv(
-                    _params, train_set=dtrain, folds=folds, 
-                    callbacks=lgb_callbacks,  **fit_params)
+                    _params, train_set=dtrain, folds=folds,
+                    callbacks=lgb_callbacks, **fit_params)
                 self.model = model_extractor.get_model().boosters
                 self.best_iteration = model_extractor.get_best_iteration()
                 self.evals_result = res
@@ -533,9 +617,6 @@ class Trainer:
             # Optuna integration
             if tune_model:
                 _fit_params = fit_params.copy()
-                if 'verbose_eval' in _fit_params.keys():
-                    _fit_params.update({'verbose_eval': False})
-                
                 self.best_score = None
                 self.best_model = None
                 self.best_iteration = 0
@@ -549,9 +630,15 @@ class Trainer:
                     
                     models = []
                     model_extractor = XGBModelExtractor(models)
+                    pruning_callback = optuna.integration.XGBoostPruningCallback(
+                        trial, f'test-{main_metric}')
+                    xgb_callbacks = [model_extractor, pruning_callback]
+                    if 'callbacks' in _fit_params.keys():
+                        xgb_callbacks += _fit_params['callbacks']
+                        _fit_params.pop('callbacks')
                     res = xgb.cv(
                         _params, dtrain=dtrain, folds=folds, maximize=maximize,
-                        callbacks=[model_extractor], **_fit_params)
+                        callbacks=xgb_callbacks, **_fit_params)
                     self.model = models
 
                     if eval_metric is None:
@@ -585,18 +672,22 @@ class Trainer:
                 study = optuna.create_study(
                     direction='maximize' if maximize else 'minimize')
                 study.optimize(
-                    xgb_objective, n_trials=n_trials, timeout=timeout, 
+                    xgb_objective, n_trials=n_trials, timeout=timeout,
                     callbacks=[logger.optuna], n_jobs=1)
                 self.model = self.best_model.copy()
                 del self.best_model
             else:
                 _params = params.copy()
-
-                model_extractor = ModelExtractor()
+                models = []
+                model_extractor = XGBModelExtractor(models)
+                xgb_callbacks = [model_extractor]
+                if 'callbacks' in fit_params.keys():
+                    xgb_callbacks += fit_params['callbacks']
+                    fit_params.pop('callbacks')
                 res = xgb.cv(
-                    _params, dtrain=dtrain, folds=folds, maximize=maximize, 
-                    callbacks=[logger.lgbm, model_extractor], **fit_params)
-                self.model = model_extractor.get_model()
+                    _params, dtrain=dtrain, folds=folds, maximize=maximize,
+                    callbacks=xgb_callbacks, **fit_params)
+                self.model = models
 
                 if maximize:
                     self.best_score = np.max(

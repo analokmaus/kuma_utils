@@ -50,11 +50,11 @@ class PropensityScoreMatching:
                 ps2_index.append(j)
                 distance_matrix[i, :] = 1
                 distance_matrix[:, j] = 1
-            del distance_matrix
         elif self.matching_method == 'hungarian':
             row_idx, col_idx = linear_sum_assignment(distance_matrix)
             valid_idx = distance_matrix[row_idx, col_idx] < caliper
             ps1_index, ps2_index = row_idx[valid_idx], col_idx[valid_idx]
+        del distance_matrix
         return ps1_index, ps2_index
 
     def run(self, df: pd.DataFrame):
@@ -62,7 +62,7 @@ class PropensityScoreMatching:
         X_match = df[self.match_cols].copy()
         X_match = pd.concat([
             self._cat_enc.fit_transform(X_match).reset_index(drop=True),
-            self._num_enc.fit_transform(X_match).reset_index(drop=True)], axis=1, ignore_index=True)
+            self._num_enc.fit_transform(X_match).reset_index(drop=True)], axis=1)
         y_match = self._le.fit_transform(df[self.group_col].copy())
 
         if self.fit_method == 'fit':
@@ -93,3 +93,13 @@ class PropensityScoreMatching:
         ], axis=0).reset_index(drop=True)
 
         return matched_data
+    
+    def plot_feature_importance(self, df: pd.DataFrame):
+        assert df[self.group_col].nunique() == 2
+        X_match = df[self.match_cols].copy()
+        X_match = pd.concat([
+            self._cat_enc.fit_transform(X_match).reset_index(drop=True),
+            self._num_enc.fit_transform(X_match).reset_index(drop=True)], axis=1)
+        y_match = self._le.fit_transform(df[self.group_col].copy())
+        self.trainer.plot_feature_importance(
+            importance_type='permutation', fit_params={'X': X_match, 'y': y_match})
