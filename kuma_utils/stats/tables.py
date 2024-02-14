@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+pd.set_option("future.no_silent_downcasting", True)
 from sklearn.preprocessing import LabelEncoder
 import scipy
 from kuma_utils.preprocessing.utils import analyze_column
@@ -17,6 +18,7 @@ def make_demographic_table(
         numerical_cols: list[str] = [],
         categorical_cutoff: int = 5,
         handle_missing: str = 'value',
+        categorical_omission_count: int = 50,
 ):
     '''
     Demographic table generator
@@ -64,13 +66,16 @@ def make_demographic_table(
             col_arr = df[col].copy().dropna()
         else:
             col_arr = df[col].copy()
-        _le = LabelEncoder()
-        _le.fit(col_arr)
-        vals_all = _le.transform(col_arr)
+        val_cnt = col_arr.value_counts()
+        if len(val_cnt) > categorical_omission_count:
+            col_arr = col_arr.apply(
+                lambda x: f'[{col}_other_categories]' if x in val_cnt.iloc[categorical_omission_count:].index else x)
+            val_cnt = col_arr.value_counts()
+        _le = {k: v for v, k in enumerate(val_cnt.index)}
+        vals_all = col_arr.replace(_le).infer_objects(copy=False).values
         vals_g1 = vals_all[g1_index]
         vals_g2 = vals_all[g2_index]
-        for enc_val, _ in enumerate(_le.classes_):
-            dec_val = _le.inverse_transform([enc_val])[0]
+        for dec_val, enc_val in _le.items():
             pos_g1 = (vals_g1 == enc_val).sum()
             pos_g2 = (vals_g2 == enc_val).sum()
             pval = scipy.stats.chi2_contingency([
@@ -136,6 +141,7 @@ def make_summary_table(
         numerical_cols: list[str] = [],
         categorical_cutoff: int = 5,
         handle_missing: str = 'value',
+        categorical_omission_count: int = 50
 ):
     '''
     Summary table generator
@@ -164,11 +170,14 @@ def make_summary_table(
             col_arr = df[col].copy().dropna()
         else:
             col_arr = df[col].copy()
-        _le = LabelEncoder()
-        _le.fit(col_arr)
-        vals_all = _le.transform(col_arr)
-        for enc_val, _ in enumerate(_le.classes_):
-            dec_val = _le.inverse_transform([enc_val])[0]
+        val_cnt = col_arr.value_counts()
+        if len(val_cnt) > categorical_omission_count:
+            col_arr = col_arr.apply(
+                lambda x: f'[{col}_other_categories]' if x in val_cnt.iloc[categorical_omission_count:].index else x)
+            val_cnt = col_arr.value_counts()
+        _le = {k: v for v, k in enumerate(val_cnt.index)}
+        vals_all = col_arr.replace(_le).infer_objects(copy=False).values
+        for dec_val, enc_val in _le.items():
             pos_all = (vals_all == enc_val).sum()
             res.append({
                 '_item': f'{col}={dec_val}, n(%)',

@@ -5,8 +5,6 @@ Modified
 '''
 import torch
 from torch import nn, optim
-from torch.nn import functional as F
-from sklearn.calibration import calibration_curve
 
 
 class TemperatureScaler(nn.Module):
@@ -27,7 +25,6 @@ class TemperatureScaler(nn.Module):
 
     def set_temperature(self, logits, labels):
         nll_criterion = nn.BCEWithLogitsLoss()
-        # before_temperature_nll = nll_criterion(logits, labels).item()
         optimizer = optim.LBFGS([self.temperature], lr=0.01, max_iter=50)
 
         def eval():

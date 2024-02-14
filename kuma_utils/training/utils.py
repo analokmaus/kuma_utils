@@ -73,7 +73,7 @@ def rmse_metric(model, data):
     else:
         target = data[1]
         approx = model.predict(data[0])
-    return np.sqrt(mean_squared_error(target, approx))
+    return mean_squared_error(target, approx, squared=False)
 
 
 class ModelExtractor:

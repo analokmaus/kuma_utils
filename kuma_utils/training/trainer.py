@@ -114,7 +114,7 @@ class Trainer:
         for key in ['metric', 'eval_metric']:
             if key in params.keys():
                 if isinstance(params[key], (list, tuple)):
-                    print('setting multiple metrics are not recommended.')
+                    print('setting multiple metrics is not recommended.')
                     main_metric = params[key][0]
                 elif isinstance(params[key], str):
                     main_metric = params[key]
@@ -122,8 +122,9 @@ class Trainer:
                     main_metric = params[key].__class__.__name__
                 if main_metric not in (DIRECTION['maximize'] + DIRECTION['minimize']):
                     print(f'specify optimization direction for metric {main_metric}.')
-                _maximize = main_metric in DIRECTION['maximize']
-                return main_metric, _maximize
+                    return main_metric, maximize
+                else:
+                    return main_metric, main_metric in DIRECTION['maximize']
         else:
             return None, maximize
 
@@ -264,8 +265,8 @@ class Trainer:
                 study = optuna.create_study(direction='maximize' if maximize else 'minimize')
                 res = {}
                 tuner = lgb_tune.LightGBMTuner(
-                    _params, 
-                    train_set=dtrain, valid_sets=[dtrain, dvalid], 
+                    _params,
+                    train_set=dtrain, valid_sets=[dtrain, dvalid],
                     valid_names='valid_1', verbosity=0,
                     study=study, time_budget=timeout, show_progress_bar=False,
                     optuna_callbacks=[logger.optuna], **deepcopy(_fit_params))
@@ -294,7 +295,7 @@ class Trainer:
             
             if convert_to_sklearn:
                 self.model = booster2sklearn(
-                    self.model, self.model_type, train_data[0], train_data[1])                    
+                    self.model, self.model_type, train_data[0], train_data[1])                
 
         elif self.model_name in MODEL_ZOO['xgb']:
             ''' XGBoost '''

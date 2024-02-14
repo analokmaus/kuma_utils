@@ -1,3 +1,3 @@
-from .trainer import TorchTrainer
+from .trainer import *
 from .callbacks import *
 from .hooks import *
