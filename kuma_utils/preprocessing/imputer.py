@@ -146,7 +146,6 @@ class LGBMImputer(PreprocessingTemplate):
         X = self._transform_dataframe(X, fit=True)
         self._scan_features(X)
         X[self.categorical_columns] = self.cat_encoder.fit_transform(X[self.categorical_columns])
-        X[self.categorical_columns] = X[self.categorical_columns].infer_objects(copy=False)
         
         if self.verbose:
             pbar = tqdm(self.target_columns)

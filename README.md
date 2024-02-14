@@ -114,6 +114,7 @@ WIP
     ┃   ┣ CBAM2d
     ┃   ┣ GroupNorm1d/2d/3d
     ┃   ┣ convert_groupnorm     - Convert all BatchNorm to GroupNorm.
+    ┃   ┣ TemperatureScaler     - Probability calibration for pytorch models.
     ┃   ┣ etc...
     ┃ 
     ┣ TorchTrainer              - PyTorch Trainer.
@@ -122,9 +123,7 @@ WIP
     ┣ SaveSnapshot              - Snapshot callback.
     ┣ SaveAverageSnapshot       - Moving average snapshot callback.
     ┣ TorchLogger               - Logger
-    ┣ TensorBoardLogger         - TensorBoard Logger
     ┣ SimpleHook                - Simple train hook for almost any tasks (see tutorial).
-    ┣ TemperatureScaler         - Probability calibration for pytorch models.
 
 ```
 
