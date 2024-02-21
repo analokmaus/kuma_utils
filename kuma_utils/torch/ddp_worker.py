@@ -36,7 +36,7 @@ def ddp_worker(path, rank, origin):
         ddp_tmp = unpickler.load()
     trainer = ddp_tmp['trainer']
     dist_url = ddp_tmp['dist_url']
-    loader =  ddp_tmp['loader']
+    loader = ddp_tmp['loader']
     loader_valid = ddp_tmp['loader_valid']
     num_epochs = ddp_tmp['num_epochs']
     

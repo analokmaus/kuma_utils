@@ -17,7 +17,7 @@ Using this library, you can:
 - Simplify the structuring of table data and feature engineering
 - implify the training and hyperparameter search for ML tools with Sklearn API (including sklearn, lightgbm, catboost, etc.)
 - Simplify the training of Pytorch models (including the use of amp and parallelization across multiple GPUs)
-- Customize training with our own Hook/Callback interface (such as Earlystop, logging functions integrated with wandb, etc.)
+- Customize training with Hook/Callback interface (such as Earlystop, logging functions integrated with wandb, etc.)
 - Automated exploratory data analysis
 - Convenient functions for basic biostatistical analysis.
 

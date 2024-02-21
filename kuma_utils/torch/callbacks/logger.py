@@ -48,9 +48,11 @@ class TorchLogger:
                 f.write(log_str + '\n')
         self.dataframe = []
 
-    def init_wandb(self):  # This is called in Trainer._train()
+    def init_wandb(self, serial: str = None):  # This is called in Trainer._train()
         if not WANDB:
             raise ValueError('wandb is not installed.')
+        if serial is not None and 'name' not in self.wandb_params.keys():  # No override
+            self.wandb_params.update({'name': serial})
         wandb.init(**self.wandb_params)
 
     def init_tensorboard(self, serial):  # This is called in Trainer._train()

@@ -10,9 +10,7 @@ import uuid
 from pprint import pformat
 import __main__
 import resource
-
 import pandas as pd
-
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DataParallel, DistributedDataParallel
@@ -63,16 +61,17 @@ class TorchTrainer:
         self.rank = 0
         self._register_ready = False
         self._model_ready = False
+        self.logger = None
 
-        ### Implicit attributes
+        # Implicit attributes
         # DDP
         self.ddp_sync_batch_norm = SyncBatchNorm.convert_sync_batchnorm
         self.ddp_average_loss = True
         self.ddp_params = dict(
-            broadcast_buffers=True, 
+            broadcast_buffers=True,
             static_graph=True,
             # find_unused_parameters=True
-            )
+        )
         self.ddp_workers = -1
         # MISC
         self.loader_to_callback = False
@@ -418,7 +417,7 @@ class TorchTrainer:
         assert self._register_ready
         assert self._model_ready
         if self.rank == 0 and hasattr(self.logger, 'use_wandb') and self.logger.use_wandb:
-            self.logger.init_wandb()
+            self.logger.init_wandb(serial=self.serial)
         if self.rank == 0 and hasattr(self.logger, 'use_tensorboard') and self.logger.use_tensorboard:
             self.logger.init_tensorboard(serial=self.serial)
         
