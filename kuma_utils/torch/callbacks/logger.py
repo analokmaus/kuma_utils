@@ -51,9 +51,10 @@ class TorchLogger:
     def init_wandb(self, serial: str = None):  # This is called in Trainer._train()
         if not WANDB:
             raise ValueError('wandb is not installed.')
-        if serial is not None and 'name' not in self.wandb_params.keys():  # No override
-            self.wandb_params.update({'name': serial})
-        wandb.init(**self.wandb_params)
+        wandb_params = self.wandb_params.copy()
+        if serial is not None and 'name' not in wandb_params.keys():  # No override
+            wandb_params.update({'name': serial})
+        wandb.init(**wandb_params)
 
     def init_tensorboard(self, serial):  # This is called in Trainer._train()
         if self.tensorboard_dir is None and self.path is not None:
