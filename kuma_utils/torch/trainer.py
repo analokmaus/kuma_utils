@@ -24,23 +24,14 @@ from .callbacks import (
 )
 from .hooks import TrainHook
 from . import distributed as comm
-from .clip_grad import dispatch_clip_grad
 from .sampler import DistributedProxySampler
+from .extras import DummyAutoCast, DummyGradScaler
 
 try:
     from torch.cuda import amp
     AMP = True
 except ModuleNotFoundError:
     AMP = False
-
-try:
-    import torch_xla.core.xla_model as xm
-    import torch_xla.distributed.parallel_loader as pl
-    import torch_xla.utils.serialization as xser
-    import torch_xla.distributed.xla_multiprocessing as xmp
-    XLA = True
-except ModuleNotFoundError:
-    XLA = False
 
 
 class TorchTrainer:
@@ -55,7 +46,6 @@ class TorchTrainer:
 
         self.serial = serial
         self.device, self.device_ids = get_device(device)
-        self.xla = self.device.type == 'xla'
         self.world_size = len(self.device_ids)
         self.model = model
         self.rank = 0
@@ -87,6 +77,7 @@ class TorchTrainer:
         self.forward_train = hook.forward_train
         self.forward_valid = hook.forward_valid
         self.forward_test = hook.forward_test
+        self.backprop = hook.backprop
         self.evaluate_batch = hook.evaluate_batch
         self.evaluate_epoch = hook.evaluate_epoch
 
@@ -102,19 +93,14 @@ class TorchTrainer:
                     self.logger('No mixed precision training backend found.')
 
         ''' Parallel training '''
-        if self.xla:  # DDP on xla
-            self.model.to(self.device)
-            if self.rank == 0:
-                self.logger(f'Model on {self.device}')
-
-        elif self.parallel == 'dp': # DP on cuda
+        if self.parallel == 'dp':  # DP on cuda
             self.model = DataParallel(
                 self.model, device_ids=self.device_ids).to(self.device)
             if hasattr(self, 'criterion'):
                 self.criterion = self.criterion.to(self.device)
             self.logger(f'DataParallel on devices {self.device_ids}')
 
-        elif self.parallel == 'ddp': # DDP on cuda
+        elif self.parallel == 'ddp':  # DDP on cuda
             self.model = self.ddp_sync_batch_norm(self.model)
             self.model = DistributedDataParallel(
                 self.model.to(self.rank), device_ids=[self.rank],
@@ -161,10 +147,7 @@ class TorchTrainer:
             raise ValueError(
                 f'batch size must be a multiple of world size({self.world_size}).')
         dl_args['batch_size'] = int(dl_args['batch_size'] / self.world_size)
-        if self.xla:
-            return pl.ParallelLoader(type(loader)(**dl_args), [self.device])
-        else:
-            return type(loader)(**dl_args)
+        return type(loader)(**dl_args)
 
     def _train_one_epoch(self, loader):
         loader_time = .0
@@ -175,8 +158,6 @@ class TorchTrainer:
         self.epoch_storage = defaultdict(list)
         for key in ['approx', 'target', 'loss', 'batch_metric']:
             self.epoch_storage[key] = []
-        if self.fp16:
-            scaler = amp.GradScaler()
 
         self.model.train()
         if self.progress_bar and self.rank == 0:
@@ -196,73 +177,29 @@ class TorchTrainer:
                 try:
                     ram_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
                     self.logger(f'Maximum RAM usage: {ram_usage} MB')
-                except:
+                except Exception:
                     self.logger('Failed to get RAM usage.')
                 try:
                     gram_usage = int(max(get_gpu_memory().values()))
                     self.logger(f'Maximum GRAM usage: {gram_usage} MB')
-                except:
+                except Exception:
                     self.logger('Failed to get GRAM usage.')
                 ett_disp = True
 
-            self.optimizer.zero_grad()
             batches_done = batch_total * (self.global_epoch-1) + batch_i
             inputs = [t.to(self.device) for t in inputs]
             
             # forward and backward
-            if self.fp16:
-                with amp.autocast():
-                    loss, approx = self.forward_train(self, inputs)
-                    self.evaluate_batch(self, inputs, approx) # evaluation
-                loss = loss / self.grad_accumulations
-                scaler.scale(loss).backward()
-                if self.clip_grad is not None:
-                    dispatch_clip_grad(self.model.parameters(), self.max_grad_norm, mode=self.clip_grad)
-                if (batch_i + 1) % self.grad_accumulations == 0:
-                    if self.sam:
-                        # first step
-                        optimizer_state = scaler._per_optimizer_states[id(self.optimizer)]
-                        scaler.unscale_(self.optimizer)
-                        if not sum(v.item() for v in optimizer_state["found_inf_per_device"].values()):
-                            self.optimizer.first_step(zero_grad=True)
-                        optimizer_state["stage"] = 2
-                        scaler.update()
-                        # second step
-                        with amp.autocast():
-                            loss2, _ = self.forward_train(self, inputs)
-                        scaler.scale(loss2).backward()
-                        scaler.unscale_(self.optimizer)
-                        if not sum(v.item() for v in optimizer_state["found_inf_per_device"].values()):
-                            self.optimizer.second_step(zero_grad=True)
-                        optimizer_state["stage"] = 2
-                        scaler.update()
-                    else:
-                        scaler.step(self.optimizer)
-                        scaler.update()
-            else:
+            with self.autocast:
                 loss, approx = self.forward_train(self, inputs)
-                self.evaluate_batch(self, inputs, approx) # evaluation
+                self.evaluate_batch(self, inputs, approx)
                 loss = loss / self.grad_accumulations
-                loss.backward()
-                if self.clip_grad is not None:
-                    dispatch_clip_grad(self.model.parameters(), self.max_grad_norm, mode=self.clip_grad)
-                if (batch_i + 1) % self.grad_accumulations == 0:
-                    if self.xla:
-                        if self.sam:
-                            raise NotImplementedError('SAM optimizer on XLA device is not available.')
-                        else:
-                            xm.optimizer_step(self.optimizer, barrier=True)
-                    else:
-                        if self.sam:
-                            self.optimizer.first_step(zero_grad=True)
-                            loss2, _ = self.forward_train(self, inputs)
-                            loss2.backward()
-                            self.optimizer.second_step(zero_grad=True)
-                        else:
-                            self.optimizer.step()
-                    if self.batch_scheduler:
-                        self.scheduler.step()
+                if ((batch_i + 1) % self.grad_accumulations == 0) or ((batch_i + 1) == len(iterator)):
+                    self.backprop(self, loss, inputs)
+            if self.batch_scheduler:
+                self.scheduler.step()
 
+            # detect invalid value
             if torch.isnan(loss).any():
                 if self.rank == 0:
                     self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(loss).sum()} NaN detected in loss.')
@@ -276,17 +213,13 @@ class TorchTrainer:
                     self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(approx).sum()} NaN detected in output tensor.')
                 approx = torch.nan_to_num(approx)
             
+            # logging
             if self.parallel == 'ddp' and self.ddp_average_loss:
-                if self.xla:
-                    loss_batch = xm.all_gather(
-                        loss.detach().clone().view(1)).mean().item()
-                else:
-                    loss_batch = comm.gather_tensor(
-                        loss.detach().clone().view(1)).mean().item()
+                loss_batch = comm.gather_tensor(
+                    loss.detach().clone().view(1)).mean().item()
             else:  # Use loss on device: 0
                 loss_batch = loss.item()
 
-            # logging
             learning_rate = [param_group['lr']
                              for param_group in self.optimizer.param_groups]
             logs = {
@@ -307,12 +240,13 @@ class TorchTrainer:
             self.logger(
                 f'loader: {loader_time:.1f} s | train: {train_time:.1f} s')
 
+        # concatenate tensors
         for key, val in self.epoch_storage.items():
             if len(val) > 0:
                 if isinstance(val[0], torch.Tensor):
                     try:
                         self.epoch_storage[key] = torch.nan_to_num(torch.cat(val))
-                    except:
+                    except Exception:
                         self.epoch_storage[key] = torch.nan_to_num(torch.stack(val, dim=0))
                 else:
                     self.epoch_storage[key] = torch.nan_to_num(torch.tensor(val)).to(self.device)
@@ -323,10 +257,7 @@ class TorchTrainer:
             # gather tensors
             for key, val in self.epoch_storage.items():
                 if len(val) > 0:
-                    if self.xla:
-                        self.epoch_storage[key] = torch.nan_to_num(xm.all_gather(val))
-                    else:
-                        self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
+                    self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
 
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
@@ -364,12 +295,8 @@ class TorchTrainer:
                     approx = torch.nan_to_num(approx)
                 self.evaluate_batch(self, inputs, approx)
                 if self.parallel == 'ddp' and self.ddp_average_loss:
-                    if self.xla:
-                        loss_batch = xm.all_gather(
-                            loss.detach().clone().view(1)).mean().item()
-                    else:
-                        loss_batch = comm.gather_tensor(
-                            loss.detach().clone().view(1)).mean().item()
+                    loss_batch = comm.gather_tensor(
+                        loss.detach().clone().view(1)).mean().item()
                 else:  # Use loss on device: 0
                     loss_batch = loss.item()
 
@@ -388,7 +315,7 @@ class TorchTrainer:
                 if isinstance(val[0], torch.Tensor):
                     try:
                         self.epoch_storage[key] = torch.nan_to_num(torch.cat(val))
-                    except:
+                    except Exception:
                         self.epoch_storage[key] = torch.nan_to_num(torch.stack(val, dim=0))
                 else:
                     self.epoch_storage[key] = torch.nan_to_num(torch.tensor(val)).to(self.device)
@@ -398,10 +325,7 @@ class TorchTrainer:
         if self.parallel == 'ddp':
             for key, val in self.epoch_storage.items():
                 if len(val) > 0:
-                    if self.xla:
-                        self.epoch_storage[key] = torch.nan_to_num(xm.all_gather(val))
-                    else:
-                        self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
+                    self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
 
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
@@ -420,9 +344,15 @@ class TorchTrainer:
             self.logger.init_wandb(serial=self.serial)
         if self.rank == 0 and hasattr(self.logger, 'use_tensorboard') and self.logger.use_tensorboard:
             self.logger.init_tensorboard(serial=self.serial)
+        if self.fp16:
+            self.scaler = amp.GradScaler()
+            self.autocast = amp.autocast()
+        else:
+            self.scaler = DummyGradScaler()
+            self.autocast = DummyAutoCast()
         
         for epoch in range(num_epochs):
-            if self.parallel == 'ddp' and not self.xla:
+            if self.parallel == 'ddp':
                 loader.sampler.set_epoch(epoch)
             
             self.state.update({'epoch': epoch})
@@ -443,7 +373,7 @@ class TorchTrainer:
                 loss_valid, metric_valid, monitor_metrics_valid = \
                     None, None, None
             else:
-                if self.parallel == 'ddp' and not self.xla:
+                if self.parallel == 'ddp':
                     loader_valid.sampler.set_epoch(epoch)
                 loss_valid, metric_valid, monitor_metrics_valid = \
                     self._valid_one_epoch(loader_valid)
@@ -512,25 +442,13 @@ class TorchTrainer:
         ''' Train '''
         self._train(loader, loader_valid, num_epochs)
 
-    def _train_xla(self, rank, loader, loader_valid, num_epochs):
-        seed_everything(self.random_state, self.deterministic)
-        self.device = xm.xla_device()
-        self.rank = xm.get_ordinal()
-        self._configure_model()
-        loader = self._configure_loader_ddp(loader)
-        loader_valid = self._configure_loader_ddp(loader_valid, shuffle=False)
-        self._train(
-            loader.per_device_loader(self.device),
-            loader_valid.per_device_loader(self.device),
-            num_epochs)
-
     def predict(self, loader, parallel=None, fp16=False, progress_bar=False):
         self.parallel = parallel
         if self.logger is None:
             self.logger = DummyLogger('')
-        if not self._register_ready: # is hook and callbacks registered?
+        if not self._register_ready:  # is hook and callbacks registered?
             raise AttributeError('Register hook and callbacks by .register() method.')
-        if not self._model_ready: # is model configured?
+        if not self._model_ready:  # is model configured?
             self.fp16 = fp16
             if parallel == 'ddp':
                 raise NotImplementedError('DDP prediction is not implemented.')
@@ -582,9 +500,9 @@ class TorchTrainer:
               # Training option
               fp16=False, parallel=None, grad_accumulations=1,
               deterministic=None, random_state=0,
-              clip_grad=None, max_grad_norm=10000,
               # Logging
               logger=None, progress_bar=False,
+              **kw_args
               ):
         # Register params
         self.criterion = criterion
@@ -594,8 +512,6 @@ class TorchTrainer:
         self.scheduler_target = scheduler_target
         self.grad_accumulations = grad_accumulations
         self.deterministic = deterministic
-        self.clip_grad = clip_grad
-        self.max_grad_norm = max_grad_norm
         self.random_state = random_state
         self.eval_metric = eval_metric
         self.monitor_metrics = monitor_metrics
@@ -611,10 +527,6 @@ class TorchTrainer:
         self.checkpoint = False
         self.outoffold = None
         self.prediction = None
-        if self.optimizer.__class__.__name__ == 'SAM':
-            self.sam = True
-        else:
-            self.sam = False
 
         ''' Configure directory '''
         if export_dir is None:
@@ -635,6 +547,8 @@ class TorchTrainer:
             pass
         else:
             raise ValueError('Invalid type of logger.')
+        if len(kw_args) > 0:
+            self.logger(f'{kw_args} will be ignored.')
 
         ''' Configure loss function and metrics '''
         if eval_metric is None:
@@ -668,53 +582,44 @@ class TorchTrainer:
         self._states = []
 
         if self.parallel == 'ddp':
-            if self.xla:
-                xmp.spawn(
-                    self._train_xla,
-                    args=(loader, loader_valid, num_epochs),
-                    nprocs=self.world_size,
-                    start_method='fork'
-                )
-
-            else:
-                dist_url = f'tcp://127.0.0.1:{comm.find_free_port()}'
-                session_id = str(uuid.uuid4())
-                origin = Path.cwd() / __main__.__file__
-                self.logger(f'DDP URL :\t{dist_url}')
-                self.logger(f'session id :\t{session_id}')
-                self.logger(f'__main__ :\t{origin}')
-                
-                ddp_tmp = {
-                    'trainer': self,
-                    'dist_url': dist_url,
-                    'loader': loader,
-                    'loader_valid': loader_valid,
-                    'num_epochs': num_epochs
-                }
-                ddp_tmp_path = Path(f'.ku_ddp_tmp_{session_id}')
-                self.ddp_tmp_path = ddp_tmp_path
-                with open(ddp_tmp_path, 'wb') as f:
-                    pickle.dump(ddp_tmp, f)
-                ddp_worker_path = Path(inspect.getfile(
-                    self.__class__)).parent/'ddp_worker.py'
-                env_copy = os.environ.copy()
-                env_copy['OMP_NUM_THREADS'] = '1'
-                
-                command = [
-                    'torchrun',
-                    '--standalone',
-                    '--nnodes', '1',
-                    '--nproc_per_node', str(self.world_size), 
-                    '--rdzv_endpoint', dist_url,
-                    ddp_worker_path,
-                    '--path', ddp_tmp_path,
-                    '--origin', str(origin)
-                ]
-                proc = subprocess.Popen(
-                    command, env=env_copy, cwd=origin.parent)
-                proc.wait()
-                if ddp_tmp_path.exists():
-                    ddp_tmp_path.unlink()
+            dist_url = f'tcp://127.0.0.1:{comm.find_free_port()}'
+            session_id = str(uuid.uuid4())
+            origin = Path.cwd() / __main__.__file__
+            self.logger(f'DDP URL :\t{dist_url}')
+            self.logger(f'session id :\t{session_id}')
+            self.logger(f'__main__ :\t{origin}')
+            
+            ddp_tmp = {
+                'trainer': self,
+                'dist_url': dist_url,
+                'loader': loader,
+                'loader_valid': loader_valid,
+                'num_epochs': num_epochs
+            }
+            ddp_tmp_path = Path(f'.ku_ddp_tmp_{session_id}')
+            self.ddp_tmp_path = ddp_tmp_path
+            with open(ddp_tmp_path, 'wb') as f:
+                pickle.dump(ddp_tmp, f)
+            ddp_worker_path = Path(inspect.getfile(
+                self.__class__)).parent/'ddp_worker.py'
+            env_copy = os.environ.copy()
+            env_copy['OMP_NUM_THREADS'] = '1'
+            
+            command = [
+                'torchrun',
+                '--standalone',
+                '--nnodes', '1',
+                '--nproc_per_node', str(self.world_size), 
+                '--rdzv_endpoint', dist_url,
+                ddp_worker_path,
+                '--path', ddp_tmp_path,
+                '--origin', str(origin)
+            ]
+            proc = subprocess.Popen(
+                command, env=env_copy, cwd=origin.parent)
+            proc.wait()
+            if ddp_tmp_path.exists():
+                ddp_tmp_path.unlink()
         else:
             self._configure_model()
             self._train(loader, loader_valid, num_epochs)

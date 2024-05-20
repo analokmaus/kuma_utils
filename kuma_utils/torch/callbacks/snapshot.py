@@ -24,19 +24,11 @@ def _save_snapshot(trainer, path,
     if save_scheduler:
         serialized['scheduler'] = trainer.scheduler.state_dict()
 
-    if trainer.xla:
-        import torch_xla.utils.serialization as xser
-        xser.save(serialized, str(path))
-    else:
-        torch.save(serialized, str(path))
+    torch.save(serialized, str(path))
 
 
 def _load_snapshot(trainer, path, device):
-    if trainer.xla:
-        import torch_xla.utils.serialization as xser
-        checkpoint = xser.load(str(path))
-    else:
-        checkpoint = torch.load(str(path), map_location=device)
+    checkpoint = torch.load(str(path), map_location=device)
 
     if isinstance(
             trainer.model,
@@ -66,12 +58,8 @@ def _save_average_snapshot(
 
     if path.exists():
         try:
-            if trainer.xla:
-                import torch_xla.utils.serialization as xser
-                checkpoints = xser.load(str(path))['checkpoints']
-            else:
-                checkpoints = torch.load(str(path), map_location='cpu')['checkpoints']
-        except:
+            checkpoints = torch.load(str(path), map_location='cpu')['checkpoints']
+        except Exception:
             checkpoints = []
     else:
         checkpoints = []
@@ -99,11 +87,7 @@ def _save_average_snapshot(
     if save_scheduler:
         serialized['scheduler'] = trainer.scheduler.state_dict()
 
-    if trainer.xla:
-        import torch_xla.utils.serialization as xser
-        xser.save(serialized, str(path))
-    else:
-        torch.save(serialized, str(path))
+    torch.save(serialized, str(path))
 
 
 class SaveAllSnapshots(CallbackTemplate):

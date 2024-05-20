@@ -19,6 +19,9 @@ class HookTemplate:
         # return approx
         pass
 
+    def backprop(self, trainer, loss, inputs):
+        pass
+
     def evaluate_batch(self, trainer, inputs):
         # return None
         pass

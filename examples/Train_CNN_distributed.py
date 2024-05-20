@@ -47,7 +47,7 @@ def split_dataset(dataset, index):
 
 
 def get_model(num_classes):
-    model = timm.create_model('tf_efficientnet_b0_ns', pretrained=True, num_classes=num_classes)
+    model = timm.create_model('tf_efficientnet_b0.ns_jft_in1k', pretrained=True, num_classes=num_classes)
     return model
 
 cfg = Config(
@@ -115,13 +115,14 @@ for fold, (train_idx, valid_idx) in enumerate(
         scheduler=scheduler,
         scheduler_target='valid_loss',  # ReduceLROnPlateau reads metric each epoch
         num_epochs=cfg.num_epochs,
-        hook=SimpleHook(evaluate_in_batch=False),
+        hook=SimpleHook(
+            evaluate_in_batch=False, clip_grad=None, sam_optimizer=False),
         callbacks=[
             EarlyStopping(
                 patience=cfg.early_stopping_rounds,
                 target='valid_metric',
                 maximize=True),
-            SaveSnapshot() # Default snapshot path: {export_dir}/{serial}.pt
+            SaveSnapshot()  # Default snapshot path: {export_dir}/{serial}.pt
         ],
         logger=logger,
         export_dir=export_dir,
@@ -129,7 +130,7 @@ for fold, (train_idx, valid_idx) in enumerate(
         fp16=True,  # Pytorch mixed precision
         deterministic=True,
         random_state=0,
-        progress_bar=True # Progress bar shows batches done
+        progress_bar=True  # Progress bar shows batches done
     )
 
     oof = trn.predict(loader_valid)

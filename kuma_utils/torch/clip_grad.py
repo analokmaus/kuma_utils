@@ -52,5 +52,7 @@ def dispatch_clip_grad(parameters, value: float, mode: str = 'norm', norm_type: 
         torch.nn.utils.clip_grad_value_(parameters, value)
     elif mode == 'agc':
         adaptive_clip_grad(parameters, value, norm_type=norm_type)
+    elif mode is None:
+        pass
     else:
         assert False, f"Unknown clip mode ({mode})."
