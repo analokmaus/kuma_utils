@@ -193,9 +193,9 @@ class TorchTrainer:
             with self.autocast:
                 loss, approx = self.forward_train(self, inputs)
                 self.evaluate_batch(self, inputs, approx)
-                loss = loss / self.grad_accumulations
-                if ((batch_i + 1) % self.grad_accumulations == 0) or ((batch_i + 1) == len(iterator)):
-                    self.backprop(self, loss, inputs)
+            loss = loss / self.grad_accumulations
+            if ((batch_i + 1) % self.grad_accumulations == 0) or ((batch_i + 1) == len(iterator)):
+                self.backprop(self, loss, inputs)
             if self.batch_scheduler:
                 self.scheduler.step()
 
