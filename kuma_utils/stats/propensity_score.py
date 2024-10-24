@@ -76,7 +76,7 @@ class PropensityScoreMatching:
                 data=(X_match, y_match),
                 **self.trainer_params)
             X_match['__z_score'] = np.mean(self.trainer.smart_predict(X_match), axis=0)
-            
+
         if self.caliper == 'auto':
             caliper = X_match['__z_score'].std() * 0.2
         else:
@@ -93,7 +93,7 @@ class PropensityScoreMatching:
         ], axis=0).reset_index(drop=True)
 
         return matched_data
-    
+
     def plot_feature_importance(self, df: pd.DataFrame):
         assert df[self.group_col].nunique() == 2
         X_match = df[self.match_cols].copy()

@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
 pd.set_option("future.no_silent_downcasting", True)
-from sklearn.preprocessing import LabelEncoder
 import scipy
 from kuma_utils.preprocessing.utils import analyze_column
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 def _mean_std(arr):
@@ -27,7 +28,7 @@ def make_demographic_table(
     - run KS test
         - if the varible follows normal distribution, run T test
         - if no, run Mann Whitney U test
-    
+
     for categorical variables:
     - run chi-squared test
     '''
@@ -75,7 +76,11 @@ def make_demographic_table(
         vals_all = col_arr.replace(_le).infer_objects(copy=False).values
         vals_g1 = vals_all[g1_index]
         vals_g2 = vals_all[g2_index]
+        if len(vals_all) == 1:
+            continue
         for dec_val, enc_val in _le.items():
+            if dec_val == 0:
+                continue
             pos_g1 = (vals_g1 == enc_val).sum()
             pos_g2 = (vals_g2 == enc_val).sum()
             pval = scipy.stats.chi2_contingency([
@@ -90,7 +95,7 @@ def make_demographic_table(
                 '_nan_info': dec_val == 'NaN',
                 g1: f'{pos_g1} ({pos_g1/len(vals_g1)*100:.1f}%)',
                 g2: f'{pos_g2} ({pos_g2/len(vals_g2)*100:.1f}%)',
-                'p-value': pval
+                'p-value': f'{pval:.3f}'
             })
 
     for col in numerical_cols:
@@ -116,7 +121,7 @@ def make_demographic_table(
                 '_nan_info': False,
                 g1: f'{mean_g1:.3f} ({std_g1:.3f})',
                 g2: f'{mean_g2:.3f} ({std_g2:.3f})',
-                'p-value': t_res.pvalue
+                'p-value': f'{t_res.pvalue:.3f}'
             })
         else:
             u_res = scipy.stats.mannwhitneyu(vals_g1, vals_g2, alternative='two-sided')
@@ -128,7 +133,7 @@ def make_demographic_table(
                 '_nan_info': False,
                 g1: f'{mean_g1:.3f} ({std_g1:.3f})',
                 g2: f'{mean_g2:.3f} ({std_g2:.3f})',
-                'p-value': u_res.pvalue
+                'p-value': f'{u_res.pvalue:.3f}'
             })
 
     return pd.DataFrame(res)
@@ -177,7 +182,11 @@ def make_summary_table(
             val_cnt = col_arr.value_counts()
         _le = {k: v for v, k in enumerate(val_cnt.index)}
         vals_all = col_arr.replace(_le).infer_objects(copy=False).values
+        if len(vals_all) == 1:
+            continue
         for dec_val, enc_val in _le.items():
+            if dec_val == 0:
+                continue
             pos_all = (vals_all == enc_val).sum()
             res.append({
                 '_item': f'{col}={dec_val}, n(%)',
@@ -198,3 +207,40 @@ def make_summary_table(
         })
 
     return pd.DataFrame(res)
+
+
+def love_plot(
+        data: pd.DataFrame,
+        match_col: str,
+        treatment_col: str,
+        covariates: list[str],
+        fig_params: dict = {},
+        return_df: bool = False,
+        title: str = "Covariate Balance",
+        ):
+    data_matched = data.query(f'{match_col} == 1')
+    means_treated_before = data.loc[data[treatment_col] == 1, covariates].mean()
+    means_control_before = data.loc[data[treatment_col] == 0, covariates].mean()
+    means_treated_after = data_matched.loc[data_matched[treatment_col] == 1, covariates].mean()
+    means_control_after = data_matched.loc[data_matched[treatment_col] == 0, covariates].mean()
+    std_before = data[covariates].std()
+    std_after = data_matched[covariates].std()
+    mean_diffs = pd.concat([
+        pd.DataFrame(
+            (means_treated_before - means_control_before).abs()/std_before).rename(
+                columns={0: 'value'}).reset_index().assign(name='before matching'),
+        pd.DataFrame(
+            (means_treated_after - means_control_after).abs()/std_after).rename(
+                columns={0: 'value'}).reset_index().assign(name='after matching'),
+    ])
+    if return_df:
+        return mean_diffs
+    else:
+        fig, ax = plt.subplots(**fig_params)
+        sns.barplot(data=mean_diffs, x='value', y='index', hue='name', ax=ax)
+        ax.axvline(0.1, color="red", linestyle="--")
+        ax.set_title(title)
+        ax.set_xlabel("Absolute Standardized Mean Differences")
+        ax.set_ylabel("Covariates")
+        plt.tight_layout()
+        return fig

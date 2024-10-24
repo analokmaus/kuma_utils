@@ -17,5 +17,5 @@ input/
 results/
 datasets/
 wandb/
-*.ipynb
-*.py
+./*.ipynb
+./.py

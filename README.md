@@ -33,7 +33,7 @@ Using this library, you can:
 # Setup
 ## With pip
 ```bash
-pip install git+https://github.com/analokmaus/kuma_utils.git@v0.5.0  # Stable
+pip install git+https://github.com/analokmaus/kuma_utils.git@v0.5.1  # Stable
 pip install git+https://github.com/analokmaus/kuma_utils.git@master  # Latest
 ```
 **IMPORTANT**
