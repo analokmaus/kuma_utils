@@ -33,11 +33,11 @@ Using this library, you can:
 # Setup
 ## With pip
 ```bash
-pip install git+https://github.com/analokmaus/kuma_utils.git@v0.5.1  # Stable
+pip install git+https://github.com/analokmaus/kuma_utils.git@v0.6.0  # Stable
 pip install git+https://github.com/analokmaus/kuma_utils.git@master  # Latest
 ```
 **IMPORTANT**
-For Apple silicon users, there will be an error building lightgbm. 
+For Apple silicon users, there can be an error related to lightgbm. 
 Please install lightgbm with the following command and then install kuma_utils.
 ```bash
 pip install --no-binary lightgbm --config-settings=cmake.define.USE_OPENMP=OFF  'lightgbm==4.3.0'

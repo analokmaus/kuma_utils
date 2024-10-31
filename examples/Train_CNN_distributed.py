@@ -23,7 +23,7 @@ from kuma_utils.metrics import Accuracy
 class Config:
     num_workers: int = 32
     batch_size: int = 64
-    num_epochs: int = 100
+    num_epochs: int = 10
     early_stopping_rounds: int = 5
 
 
@@ -51,7 +51,7 @@ def get_model(num_classes):
     return model
 
 cfg = Config(
-    num_workers=32, 
+    num_workers=32,
     batch_size=2048,
     num_epochs=10,
     early_stopping_rounds=5,
@@ -89,8 +89,8 @@ for fold, (train_idx, valid_idx) in enumerate(
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', factor=0.5, patience=2)
     logger = TorchLogger(
-        path='results/demo/log', 
-        log_items='epoch train_loss train_metric valid_loss valid_metric learning_rate early_stop', 
+        path='results/demo/log',
+        log_items='epoch train_loss train_metric valid_loss valid_metric learning_rate early_stop',
         file=True,
         use_wandb=True, wandb_params={
             'project': 'kuma_utils_demo',
@@ -107,7 +107,7 @@ for fold, (train_idx, valid_idx) in enumerate(
         loader=loader_train,
         loader_valid=loader_valid,
         criterion=nn.CrossEntropyLoss(),
-        eval_metric=Accuracy().torch, 
+        eval_metric=Accuracy().torch,
         monitor_metrics=[
             Accuracy().torch
         ],

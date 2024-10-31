@@ -4,6 +4,7 @@ import subprocess
 import numpy as np
 import torch
 import time
+import resource
 try:
     import torch_xla
     import torch_xla.core.xla_model as xm
@@ -51,7 +52,7 @@ def get_device(arg):
         if isinstance(arg[0], int):
             device_ids = list(arg)
         elif isinstance(arg[0], str) and arg[0].isnumeric():
-             device_ids = [ int(a) for a in arg ]
+            device_ids = [int(a) for a in arg]
         else:
             raise ValueError(f'Invalid device: {arg}')
     else:
@@ -67,7 +68,7 @@ def get_device(arg):
                 device_ids = [device.index]
         else:
             device_ids = [device.index]
-    
+
     return device, device_ids
 
 
@@ -86,7 +87,7 @@ def seed_everything(random_state=0, deterministic=False):
 
 def get_gpu_memory():
     """
-    Code borrowed from: 
+    Code borrowed from:
     https://discuss.pytorch.org/t/access-gpu-memory-usage-in-pytorch/3192/4
 
     Get the current gpu usage.
@@ -106,6 +107,18 @@ def get_gpu_memory():
     gpu_memory = [int(x) for x in result.strip().split('\n')]
     gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
     return gpu_memory_map
+
+
+def get_system_usage():
+    try:
+        ram_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024  # MB
+    except Exception:
+        ram_usage = None
+    try:
+        gram_usage = ' / '.join([f'{gid}:{gram} MB' for gid, gram in get_gpu_memory().items()])
+    except Exception:
+        gram_usage = None
+    return {'ram_usage': ram_usage, 'gram_usage': gram_usage}
 
 
 def get_time(time_format='%H:%M:%S'):

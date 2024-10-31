@@ -12,21 +12,6 @@ class TrainHook(HookTemplate):
         self.max_grad_norm = max_grad_norm
         self.sam_optimizer = sam_optimizer
 
-    def _evaluate(self, trainer, approx, target):
-        if trainer.eval_metric is None:
-            metric_score = None
-        else:
-            metric_score = trainer.eval_metric(approx, target)
-            if isinstance(metric_score, torch.Tensor):
-                metric_score = metric_score.item()
-        monitor_score = []
-        for monitor_metric in trainer.monitor_metrics:
-            score = monitor_metric(approx, target)
-            if isinstance(score, torch.Tensor):
-                score = score.item()
-            monitor_score.append(score)
-        return metric_score, monitor_score
-
     def forward_train(self, trainer, inputs):
         target = inputs[-1]
         approx = trainer.model(*inputs[:-1])
@@ -78,7 +63,25 @@ class TrainHook(HookTemplate):
             self._backprop_sam(trainer, loss, inputs)
         else:
             self._backprop_normal(trainer, loss, inputs)
-    
+
+    def _evaluate(self, trainer, approx, target):
+        if trainer.eval_metric is None:
+            if trainer.criterion is None:
+                metric_score = 0.
+            else:
+                metric_score = trainer.criterion(approx, target).item()
+        else:
+            metric_score = trainer.eval_metric(approx, target)
+            if isinstance(metric_score, torch.Tensor):
+                metric_score = metric_score.item()
+        monitor_score = []
+        for monitor_metric in trainer.monitor_metrics:
+            score = monitor_metric(approx, target)
+            if isinstance(score, torch.Tensor):
+                score = score.item()
+            monitor_score.append(score)
+        return metric_score, monitor_score
+
     def evaluate_batch(self, trainer, inputs, approx):
         target = inputs[-1]
         storage = trainer.epoch_storage
@@ -98,8 +101,7 @@ class TrainHook(HookTemplate):
             # Calculate mean metrics from all batches
             metric_total = storage['batch_metric'].mean(0)
             monitor_total = storage['batch_monitor'].mean(0).tolist()
-
-        else: 
+        else:
             # Calculate scores
             metric_total, monitor_total = self._evaluate(
                 trainer, storage['approx'], storage['target'])

@@ -9,7 +9,6 @@ import os
 import uuid
 from pprint import pformat
 import __main__
-import resource
 import pandas as pd
 import torch
 import torch.distributed as dist
@@ -18,7 +17,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn import SyncBatchNorm
 from torch.utils.data.sampler import Sampler
 
-from .utils import get_device, seed_everything, get_gpu_memory
+from .utils import get_device, seed_everything, get_system_usage
 from .callbacks import (
     TorchLogger, DummyLogger, SaveSnapshot
 )
@@ -66,6 +65,8 @@ class TorchTrainer:
         # MISC
         self.loader_to_callback = False
         self.debug = False
+        self.display_ett_time = 30
+        self.fix_nan = False
 
     def _register_callbacks(self, callbacks):
         self.before_epoch = [func.before_epoch for func in callbacks]
@@ -96,9 +97,9 @@ class TorchTrainer:
         if self.parallel == 'dp':  # DP on cuda
             self.model = DataParallel(
                 self.model, device_ids=self.device_ids).to(self.device)
-            if hasattr(self, 'criterion'):
+            if hasattr(self, 'criterion') and self.criterion is not None:
                 self.criterion = self.criterion.to(self.device)
-            self.logger(f'DataParallel on devices {self.device_ids}')
+            self.logger(f'DataParallel on device: {self.device_ids}')
 
         elif self.parallel == 'ddp':  # DDP on cuda
             self.model = self.ddp_sync_batch_norm(self.model)
@@ -106,20 +107,20 @@ class TorchTrainer:
                 self.model.to(self.rank), device_ids=[self.rank],
                 **self.ddp_params
             )
-            if hasattr(self, 'criterion'):
+            if hasattr(self, 'criterion') and self.criterion is not None:
                 self.criterion = self.criterion.to(self.rank)
             if self.rank == 0:
                 self.logger(
-                    f'DistributedDataParallel on devices {self.device_ids}')
+                    f'DistributedDataParallel on device: {self.device_ids}')
 
         elif self.parallel is not None:
             raise ValueError(f'Unknown type of parallel {self.parallel}')
 
         else:  # Single device
             self.model.to(self.device)
-            if hasattr(self, 'criterion'):
+            if hasattr(self, 'criterion') and self.criterion is not None:
                 self.criterion = self.criterion.to(self.device)
-            self.logger(f'Model on {self.device}')
+            self.logger(f'Model on device: {self.device}')
         
         self._model_ready = True
 
@@ -149,6 +150,38 @@ class TorchTrainer:
         dl_args['batch_size'] = int(dl_args['batch_size'] / self.world_size)
         return type(loader)(**dl_args)
 
+    def _find_and_fix_nan(self, inputs, loss, approx, prefix=''):
+        if torch.isnan(loss).any():
+            if self.rank == 0:
+                self.logger(f'{prefix} {torch.isnan(loss).sum()} NaN detected in loss.')
+            loss = torch.nan_to_num(loss)
+            for input_i, input_t in enumerate(inputs):
+                if torch.isnan(input_t).any():
+                    if self.rank == 0:
+                        self.logger(f'{prefix} NaN detected in {input_i}-th input.')
+        if torch.isnan(approx).any():
+            if self.rank == 0:
+                self.logger(f'{prefix} {torch.isnan(approx).sum()} NaN detected in output.')
+            approx = torch.nan_to_num(approx)
+        return loss, approx
+
+    def _gather_storage(self):
+        for key, val in self.epoch_storage.items():
+            if len(val) > 0:
+                self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
+                if self.debug:
+                    self.logger(f'[rank {self.rank}] gather storage {key}: {self.epoch_storage[key].shape}')
+
+    def _concat_storage(self):
+        for key, val in self.epoch_storage.items():
+            if len(val) > 0:
+                if isinstance(val[0], torch.Tensor):  # val: [(batch, ...), (batch, ...), ...]
+                    self.epoch_storage[key] = torch.nan_to_num(torch.cat(val))
+                else:  # val: [value, value, ...]
+                    self.epoch_storage[key] = torch.nan_to_num(torch.tensor(val)).to(self.device)
+                if self.debug:
+                    self.logger(f'[rank {self.rank}] concat storage {key}: {self.epoch_storage[key].shape}')
+
     def _train_one_epoch(self, loader):
         loader_time = .0
         train_time = .0
@@ -171,24 +204,17 @@ class TorchTrainer:
             loader_time += time.time() - curr_time
             curr_time = time.time()
             elapsed_time = curr_time - start_time
-            if self.rank == 0 and self.state['epoch'] == 0 and elapsed_time > 30 and not ett_disp: # show ETA
+            if self.rank == 0 and self.state['epoch'] == 0 and elapsed_time > self.display_ett_time and not ett_disp:  # show ETA
                 ett = elapsed_time * batch_total // (batch_i + 1)
+                system_usage = get_system_usage()
                 self.logger(f'Estimated epoch training time: {int(ett)} s')
-                try:
-                    ram_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
-                    self.logger(f'Maximum RAM usage: {ram_usage} MB')
-                except Exception:
-                    self.logger('Failed to get RAM usage.')
-                try:
-                    gram_usage = int(max(get_gpu_memory().values()))
-                    self.logger(f'Maximum GRAM usage: {gram_usage} MB')
-                except Exception:
-                    self.logger('Failed to get GRAM usage.')
+                self.logger(f'Maximum RAM usage: {system_usage["ram_usage"]} MB')
+                self.logger(f'Maximum GRAM usage: {system_usage["gram_usage"]}')
                 ett_disp = True
 
             batches_done = batch_total * (self.global_epoch-1) + batch_i
             inputs = [t.to(self.device) for t in inputs]
-            
+
             # forward and backward
             with self.autocast:
                 loss, approx = self.forward_train(self, inputs)
@@ -199,24 +225,15 @@ class TorchTrainer:
             if self.batch_scheduler:
                 self.scheduler.step()
 
-            # detect invalid value
-            if torch.isnan(loss).any():
-                if self.rank == 0:
-                    self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(loss).sum()} NaN detected in loss.')
-                loss = torch.nan_to_num(loss)
-                for input_i, input_t in enumerate(inputs):
-                    if torch.isnan(input_t).any():
-                        if self.rank == 0:
-                            self.logger(f'[{self.rank}] NaN detected in {input_i}-th input.')
-            if torch.isnan(approx).any():
-                if self.rank == 0:
-                    self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(approx).sum()} NaN detected in output tensor.')
-                approx = torch.nan_to_num(approx)
-            
+            # detect nan value
+            if self.fix_nan:
+                loss, approx = self._find_and_fix_nan(
+                    inputs, loss, approx,
+                    prefix=f'[{self.rank}] ({batch_i}/{len(loader)})')
+
             # logging
             if self.parallel == 'ddp' and self.ddp_average_loss:
-                loss_batch = comm.gather_tensor(
-                    loss.detach().clone().view(1)).mean().item()
+                loss_batch = comm.gather_tensor(loss.detach().clone().view(1)).mean().item()
             else:  # Use loss on device: 0
                 loss_batch = loss.item()
 
@@ -236,36 +253,20 @@ class TorchTrainer:
             train_time += time.time() - curr_time
             curr_time = time.time()
 
-        if self.debug and self.rank == 0:
-            self.logger(
-                f'loader: {loader_time:.1f} s | train: {train_time:.1f} s')
-
-        # concatenate tensors
-        for key, val in self.epoch_storage.items():
-            if len(val) > 0:
-                if isinstance(val[0], torch.Tensor):
-                    try:
-                        self.epoch_storage[key] = torch.nan_to_num(torch.cat(val))
-                    except Exception:
-                        self.epoch_storage[key] = torch.nan_to_num(torch.stack(val, dim=0))
-                else:
-                    self.epoch_storage[key] = torch.nan_to_num(torch.tensor(val)).to(self.device)
-
-        loss_total = torch.nan_to_num(self.epoch_storage['loss']).mean().item()
+        self._concat_storage()
+        loss_total = self.epoch_storage['loss'].mean().item()
 
         if self.parallel == 'ddp':
-            # gather tensors
-            for key, val in self.epoch_storage.items():
-                if len(val) > 0:
-                    self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
-
+            self._gather_storage()
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
-
         else:
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
-        if metric_total is None:
+        if self.eval_metric is None:
             metric_total = loss_total
+
+        if self.debug:
+            self.logger(f'[rank {self.rank}] loader: {loader_time:.1f} s | train: {train_time:.1f} s')
 
         return loss_total, metric_total, monitor_metrics_total
 
@@ -285,14 +286,10 @@ class TorchTrainer:
                 batches_done = len(loader) * (self.global_epoch-1) + batch_i
                 inputs = [t.to(self.device) for t in inputs]
                 loss, approx = self.forward_valid(self, inputs)
-                if torch.isnan(loss).any():
-                    if self.rank == 0:
-                        self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(loss).sum()} NaN detected in loss.')
-                    loss = torch.nan_to_num(loss)
-                if torch.isnan(approx).any():
-                    if self.rank == 0:
-                        self.logger(f'[{self.rank}] ({batch_i}/{len(loader)}) {torch.isnan(approx).sum()} NaN detected in output tensor.')
-                    approx = torch.nan_to_num(approx)
+                if self.fix_nan:
+                    loss, approx = self._find_and_fix_nan(
+                        inputs, loss, approx,
+                        prefix=f'[{self.rank}] ({batch_i}/{len(loader)})')
                 self.evaluate_batch(self, inputs, approx)
                 if self.parallel == 'ddp' and self.ddp_average_loss:
                     loss_batch = comm.gather_tensor(
@@ -310,29 +307,16 @@ class TorchTrainer:
                     self.logger.write_log(logs, batches_done, log_wandb=False)
                 self.epoch_storage['loss'].append(loss_batch)
 
-        for key, val in self.epoch_storage.items():
-            if len(val) > 0:
-                if isinstance(val[0], torch.Tensor):
-                    try:
-                        self.epoch_storage[key] = torch.nan_to_num(torch.cat(val))
-                    except Exception:
-                        self.epoch_storage[key] = torch.nan_to_num(torch.stack(val, dim=0))
-                else:
-                    self.epoch_storage[key] = torch.nan_to_num(torch.tensor(val)).to(self.device)
-
-        loss_total = torch.nan_to_num(self.epoch_storage['loss']).mean().item()
+        self._concat_storage()
+        loss_total = self.epoch_storage['loss'].mean().item()
 
         if self.parallel == 'ddp':
-            for key, val in self.epoch_storage.items():
-                if len(val) > 0:
-                    self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
-
+            self._gather_storage()
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
-
         else:
             metric_total, monitor_metrics_total = self.evaluate_epoch(self)
 
-        if metric_total is None:
+        if self.eval_metric is None:
             metric_total = loss_total
 
         return loss_total, metric_total, monitor_metrics_total
@@ -397,7 +381,7 @@ class TorchTrainer:
 
             ''' After epoch callbacks '''
             after_trains = self.after_epoch + [self.logger.after_epoch]
-            if self.rank != 0 and not self.debug:
+            if self.rank != 0:  # export logs on rank 0 device only
                 after_trains = after_trains[:-1]
             for func in after_trains:
                 if self.loader_to_callback:
@@ -432,7 +416,7 @@ class TorchTrainer:
         torch.cuda.set_device(self.rank)
         if self.rank == 0:
             self.ddp_tmp_path.unlink()
-            self.logger(f'All processes initialized.')
+            self.logger('All processes initialized.')
         
         ''' Configure model and loader '''
         self._configure_model()
@@ -551,9 +535,10 @@ class TorchTrainer:
             self.logger(f'{kw_args} will be ignored.')
 
         ''' Configure loss function and metrics '''
+        if criterion is None:
+            self.logger('criterion is not set. Make sure loss is calculated in the training hook.')
         if eval_metric is None:
-            self.logger(
-                'eval_metric is not set. criterion will be used.')
+            self.logger('eval_metric is not set. criterion will be used.')
         if not isinstance(self.monitor_metrics, (list, tuple)):
             self.monitor_metrics = [self.monitor_metrics]
 

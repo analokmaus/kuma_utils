@@ -121,7 +121,7 @@ class TorchLogger:
                 f.write(log_str + '\n')
         self.write_log(log_dict, epoch)
 
-    def write_log(self, 
+    def write_log(self,
                   logs: dict,
                   step: int,
                   log_wandb: bool = True,
