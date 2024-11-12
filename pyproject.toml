@@ -1,15 +1,15 @@
 [tool.poetry]
 name = "kuma_utils"
-version = "0.6.0"
+version = "0.6.1"
 description = ""
 authors = ["Hiroshi Yoshihara"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
-torch = {version = "^2.1.1+cu118", source = "torch_cu118"}
-torchvision = {version = "^0.16.1+cu118", source = "torch_cu118"}
-torchaudio = {version = "^2.1.1+cu118", source = "torch_cu118"}
+torch = {version = "2.1.1", source = "torch_cu121"}
+torchvision = {version = "0.16.1", source = "torch_cu121"}
+torchaudio = {version = "2.1.1", source = "torch_cu121"}
 ipykernel = "^6.29.0"
 jupyter = "^1.0.0"
 scipy = "^1.12.0"
@@ -30,8 +30,8 @@ matplotlib-venn = "^0.11.10"
 
 
 [[tool.poetry.source]]
-name = "torch_cu118"
-url = "https://download.pytorch.org/whl/cu118"
+name = "torch_cu121"
+url = "https://download.pytorch.org/whl/cu121"
 priority = "explicit"
 
 [build-system]
