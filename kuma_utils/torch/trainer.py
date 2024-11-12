@@ -329,8 +329,8 @@ class TorchTrainer:
         if self.rank == 0 and hasattr(self.logger, 'use_tensorboard') and self.logger.use_tensorboard:
             self.logger.init_tensorboard(serial=self.serial)
         if self.fp16:
-            self.scaler = amp.GradScaler()
-            self.autocast = amp.autocast()
+            self.scaler = torch.GradScaler(self.device.type)
+            self.autocast = torch.autocast(self.device.type)
         else:
             self.scaler = DummyGradScaler()
             self.autocast = DummyAutoCast()
@@ -449,7 +449,7 @@ class TorchTrainer:
             for inputs in iterator:
                 inputs = [t.to(self.device) for t in inputs]
                 if self.fp16:
-                    with amp.autocast():
+                    with torch.autocast(self.device.type):
                         approx = self.forward_test(self, inputs)
                 else:
                     approx = self.forward_test(self, inputs)

@@ -1,15 +1,15 @@
 [tool.poetry]
 name = "kuma_utils"
-version = "0.6.1"
+version = "0.6.2"
 description = ""
 authors = ["Hiroshi Yoshihara"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
-torch = {version = "2.1.1", source = "torch_cu121"}
-torchvision = {version = "0.16.1", source = "torch_cu121"}
-torchaudio = {version = "2.1.1", source = "torch_cu121"}
+torch = {version = "^2.5.1", source = "torch_cu121"}
+torchvision = {version = "^0.20.0", source = "torch_cu121"}
+torchaudio = {version = "^2.5.0", source = "torch_cu121"}
 ipykernel = "^6.29.0"
 jupyter = "^1.0.0"
 scipy = "^1.12.0"
