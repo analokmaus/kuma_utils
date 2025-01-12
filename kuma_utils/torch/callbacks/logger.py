@@ -1,9 +1,10 @@
+import logging
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 try:
     import wandb
     WANDB = True
-except:
+except Exception as e:
     WANDB = False
     pass
 
@@ -12,20 +13,24 @@ from kuma_utils.torch.utils import get_gpu_memory, get_time
 
 class TorchLogger:
 
-    def __init__(self,
-                 path,
-                 log_items=[
-                     'epoch',
-                     'train_loss', 'valid_loss',
-                     'train_metric', 'valid_metric',
-                     'train_monitor', 'valid_monitor',
-                     'learning_rate', 'early_stop'],
-                 verbose_eval=1,
-                 stdout=True, file=False,
-                 use_wandb=False,
-                 wandb_params={'project': 'test', 'config': {}},
-                 use_tensorboard=False,
-                 tensorboard_dir=None):
+    def __init__(
+            self,
+            path: str | Path,
+            log_items: list[str] | str = [
+                'epoch',
+                'train_loss', 'valid_loss',
+                'train_metric', 'valid_metric',
+                'train_monitor', 'valid_monitor',
+                'learning_rate', 'early_stop'],
+            verbose_eval: int = 1,
+            stdout: bool = True,
+            file: bool = False,
+            logger_name: str = 'TorchLogger',
+            default_level: str = 'INFO',
+            use_wandb: bool = False,
+            wandb_params: dict = {'project': 'test', 'config': {}},
+            use_tensorboard: bool = False,
+            tensorboard_dir: str | Path = None):
         if isinstance(log_items, str):
             log_items = log_items.split(' ')
         self.path = path
@@ -35,18 +40,31 @@ class TorchLogger:
         self.verbose_eval = verbose_eval
         self.stdout = stdout
         self.file = file
+        self.logger_name = logger_name
+        self.level = default_level
         self.use_wandb = use_wandb
         self.wandb_params = wandb_params
         self.use_tensorboard = use_tensorboard
         self.tensorboard_dir = tensorboard_dir
         self.sep = ' | '
-        log_str = f'TorchLogger created at {get_time("%y/%m/%d %H:%M:%S")}'
-        if self.stdout:
-            print(log_str)
-        if self.file:
-            with open(self.path, 'w') as f:
-                f.write(log_str + '\n')
         self.dataframe = []
+
+        self.system_logger = logging.getLogger(self.logger_name)
+        for handler in self.system_logger.handlers[:]:
+            self.system_logger.removeHandler(handler)
+            handler.close()
+        self.system_logger.setLevel(self.level)
+        formatter = logging.Formatter("%(asctime)s - %(levelname)-8s - %(message)s")
+        if self.file:
+            fh = logging.FileHandler(self.path)
+            fh.setFormatter(formatter)
+            self.system_logger.addHandler(fh)
+        if self.stdout:
+            sh = logging.StreamHandler()
+            sh.setFormatter(formatter)
+            self.system_logger.addHandler(sh)
+        for level in ['debug', 'info', 'warning', 'error', 'critical']:
+            setattr(self, level, getattr(self.system_logger, level))
 
     def init_wandb(self, serial: str = None):  # This is called in Trainer._train()
         if not WANDB:
@@ -65,12 +83,7 @@ class TorchLogger:
         self.tb_writer = SummaryWriter(log_dir=self.tensorboard_dir)
 
     def __call__(self, log_str):
-        log_str = get_time() + ' ' + log_str
-        if self.stdout:
-            print(log_str)
-        if self.file:
-            with open(self.path, 'a') as f:
-                f.write(log_str + '\n')
+        self.info(log_str)
 
     def after_epoch(self, env, loader=None, loader_valid=None):
         ''' callback '''
@@ -112,13 +125,7 @@ class TorchLogger:
                     log_str += f"{item}={val:.6f}"
                     log_dict[item] = val
             log_str += self.sep
-        if len(log_str) > 0:
-            log_str = f'{get_time()} ' + log_str
-        if self.stdout:
-            print(log_str)
-        if self.file:
-            with open(self.path, 'a') as f:
-                f.write(log_str + '\n')
+        self.__call__(log_str)
         self.write_log(log_dict, epoch)
 
     def write_log(self,
@@ -136,7 +143,8 @@ class TorchLogger:
 class DummyLogger:
 
     def __init__(self, path):
-        pass
+        for level in ['debug', 'info', 'warning', 'error', 'critical']:
+            setattr(self, level, self.__call__)
 
     def __call__(self, log_str):
         pass

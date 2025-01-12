@@ -1,4 +1,4 @@
-# Kuma's Toolkit 2024
+# Kuma's Toolkit 2025
 
 ```
 　 　 　┼╂┼
@@ -33,7 +33,7 @@ Using this library, you can:
 # Setup
 ## With pip
 ```bash
-pip install git+https://github.com/analokmaus/kuma_utils.git@v0.6.2  # Stable
+pip install git+https://github.com/analokmaus/kuma_utils.git@v0.7.0  # Stable
 pip install git+https://github.com/analokmaus/kuma_utils.git@master  # Latest
 ```
 **IMPORTANT**
@@ -44,15 +44,9 @@ pip install --no-binary lightgbm --config-settings=cmake.define.USE_OPENMP=OFF  
 pip install git+https://github.com/analokmaus/kuma_utils.git
 ```
 
-## With poetry
+## With rye
 ```bash
-git clone https://github.com/analokmaus/kuma_utils.git
-cd kuma_utils
-poetry install
-```
-or simply,
-```bash
-poetry add git+https://github.com/analokmaus/kuma_utils.git
+rye add kuma_utils --git https://github.com/analokmaus/kuma_utils.git
 ```
 
 ## Alternative installation methods

@@ -91,7 +91,7 @@ class TorchTrainer:
             else:
                 self.fp16 = False
                 if self.rank == 0:
-                    self.logger('No mixed precision training backend found.')
+                    self.logger.warning('No mixed precision training backend found.')
 
         ''' Parallel training '''
         if self.parallel == 'dp':  # DP on cuda
@@ -153,15 +153,15 @@ class TorchTrainer:
     def _find_and_fix_nan(self, inputs, loss, approx, prefix=''):
         if torch.isnan(loss).any():
             if self.rank == 0:
-                self.logger(f'{prefix} {torch.isnan(loss).sum()} NaN detected in loss.')
+                self.logger.warning(f'{prefix} {torch.isnan(loss).sum()} NaN detected in loss.')
             loss = torch.nan_to_num(loss)
             for input_i, input_t in enumerate(inputs):
                 if torch.isnan(input_t).any():
                     if self.rank == 0:
-                        self.logger(f'{prefix} NaN detected in {input_i}-th input.')
+                        self.logger.warning(f'{prefix} NaN detected in {input_i}-th input.')
         if torch.isnan(approx).any():
             if self.rank == 0:
-                self.logger(f'{prefix} {torch.isnan(approx).sum()} NaN detected in output.')
+                self.logger.warning(f'{prefix} {torch.isnan(approx).sum()} NaN detected in output.')
             approx = torch.nan_to_num(approx)
         return loss, approx
 
@@ -170,7 +170,7 @@ class TorchTrainer:
             if len(val) > 0:
                 self.epoch_storage[key] = torch.nan_to_num(comm.gather_tensor(val))
                 if self.debug:
-                    self.logger(f'[rank {self.rank}] gather storage {key}: {self.epoch_storage[key].shape}')
+                    self.logger.debug(f'[rank {self.rank}] gather storage {key}: {self.epoch_storage[key].shape}')
 
     def _concat_storage(self):
         for key, val in self.epoch_storage.items():
@@ -180,7 +180,7 @@ class TorchTrainer:
                 else:  # val: [value, value, ...]
                     self.epoch_storage[key] = torch.nan_to_num(torch.tensor(val)).to(self.device)
                 if self.debug:
-                    self.logger(f'[rank {self.rank}] concat storage {key}: {self.epoch_storage[key].shape}')
+                    self.logger.debug(f'[rank {self.rank}] concat storage {key}: {self.epoch_storage[key].shape}')
 
     def _train_one_epoch(self, loader):
         loader_time = .0
@@ -266,7 +266,7 @@ class TorchTrainer:
             metric_total = loss_total
 
         if self.debug:
-            self.logger(f'[rank {self.rank}] loader: {loader_time:.1f} s | train: {train_time:.1f} s')
+            self.logger.debug(f'[rank {self.rank}] loader: {loader_time:.1f} s | train: {train_time:.1f} s')
 
         return loss_total, metric_total, monitor_metrics_total
 
@@ -532,13 +532,13 @@ class TorchTrainer:
         else:
             raise ValueError('Invalid type of logger.')
         if len(kw_args) > 0:
-            self.logger(f'{kw_args} will be ignored.')
+            self.logger.warning(f'{kw_args} will be ignored.')
 
         ''' Configure loss function and metrics '''
         if criterion is None:
-            self.logger('criterion is not set. Make sure loss is calculated in the training hook.')
+            self.logger.warning('criterion is not set. Make sure loss is calculated in the training hook.')
         if eval_metric is None:
-            self.logger('eval_metric is not set. criterion will be used.')
+            self.logger.warning('eval_metric is not set. criterion will be used.')
         if not isinstance(self.monitor_metrics, (list, tuple)):
             self.monitor_metrics = [self.monitor_metrics]
 
