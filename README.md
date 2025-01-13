@@ -37,7 +37,7 @@ pip install git+https://github.com/analokmaus/kuma_utils.git@master  # Latest
 ```
 
 ### IMPORTANT:
-**You must install `libomp` before installing this package.**
+**Mac users must install `libomp` before installing this package.**
 ```bash
 brew install libomp
 pip install git+https://github.com/analokmaus/kuma_utils.git
