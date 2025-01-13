@@ -21,32 +21,21 @@ Using this library, you can:
 - Automated exploratory data analysis
 - Convenient functions for basic biostatistical analysis.
 
-## What's new
-- Wandb integration
-- Upgrade to newer backend libraries
-- Integration of TensorboardLogger into TorchLogger
-- Automated hyperparameter tuning for lightgbm/xgboost/catboost.cv()
-
 ## Work in progress
 - Multi-node DDP
 
 # Setup
 ## With pip
 ```bash
-pip install git+https://github.com/analokmaus/kuma_utils.git@v0.7.0  # Stable
-pip install git+https://github.com/analokmaus/kuma_utils.git@master  # Latest
-```
-**IMPORTANT**
-For Apple silicon users, there can be an error related to lightgbm. 
-Please install lightgbm with the following command and then install kuma_utils.
-```bash
-pip install --no-binary lightgbm --config-settings=cmake.define.USE_OPENMP=OFF  'lightgbm==4.3.0'
-pip install git+https://github.com/analokmaus/kuma_utils.git
+# Stable
+pip install https://github.com/analokmaus/kuma_utils/releases/download/v0.7.0/dist/kuma_utils-0.7.0-py3-none-any.whl/
+# Master branch
+pip install https://github.com/analokmaus/kuma_utils/raw/master/dist/kuma_utils-0.7.0-py3-none-any.whl
 ```
 
-## With rye
+## Build with rye
 ```bash
-rye add kuma_utils --git https://github.com/analokmaus/kuma_utils.git
+rye add kuma_utils --git https://github.com/analokmaus/kuma_utils.git@v0.7.0
 ```
 
 ## Alternative installation methods

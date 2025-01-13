@@ -11,8 +11,7 @@ __pycache__/
 catboost_info/
 
 # Project
-dist/
-poetry.lock
+*.lock
 input/
 results/
 datasets/
