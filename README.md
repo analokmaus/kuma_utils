@@ -25,17 +25,27 @@ Using this library, you can:
 - Multi-node DDP
 
 # Setup
-## With pip
+## Pip
+**Stable**
 ```bash
-# Stable
-pip install https://github.com/analokmaus/kuma_utils/releases/download/v0.7.0/dist/kuma_utils-0.7.0-py3-none-any.whl/
-# Master branch
-pip install https://github.com/analokmaus/kuma_utils/raw/master/dist/kuma_utils-0.7.0-py3-none-any.whl
+pip install git+https://github.com/analokmaus/kuma_utils.git@v0.7.0  # Stable
 ```
 
-## Build with rye
+**Latest**
 ```bash
-rye add kuma_utils --git https://github.com/analokmaus/kuma_utils.git@v0.7.0
+pip install git+https://github.com/analokmaus/kuma_utils.git@master  # Latest
+```
+
+### IMPORTANT:
+**You must install `libomp` before installing this package.**
+```bash
+brew install libomp
+pip install git+https://github.com/analokmaus/kuma_utils.git
+```
+
+## Poetry
+```bash
+poetry add git+https://github.com/analokmaus/kuma_utils.git
 ```
 
 ## Alternative installation methods
